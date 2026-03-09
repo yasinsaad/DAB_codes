@@ -1,128 +1,183 @@
 function [P_sw_total, is_zvs, t_trans_needed, E_ratio] = calculate_switching_zvs(V_DC, I_sw, f_sw, L_comm, s, t_dead)
-% CALCULATE_SWITCHING_ZVS Calculates switching losses with physics-based ZVS validation.
+% CALCULATE_SWITCHING_ZVS
+% Calculates switching loss for one device/leg commutation using:
+%   1) a ZVS feasibility check
+%   2) hard-switching turn-on loss if ZVS fails
+%   3) turn-off overlap loss
 %
-%   Implements the analytical loss model from "Analytical Estimation of Power Losses..."
-%   (Energies 2022, 15, 8262), extended with a Dead Time constraint check.
+% Inputs:
+%   V_DC   : DC bus voltage seen by the bridge leg [V]
+%   I_sw   : current magnitude at the switching instant [A]
+%   f_sw   : switching frequency [Hz]
+%   L_comm : effective commutation inductance [H]
+%   s      : semiconductor parameter struct
+%   t_dead : actual inserted dead time [s]
 %
-%   Inputs:
-%       V_DC   : DC Link Voltage (V) across the bridge leg.
-%       I_sw   : Instantaneous current (A) at the commutation moment.
-%       f_sw   : Switching Frequency (Hz).
-%       L_comm : Commutation Inductance (H) (e.g., Lk for primary).
-%       s      : Semiconductor struct (contains C_oss, R_g, diode params, etc.).
-%       t_dead : Dead time (s) allocated for the transition.
-%
-%   Outputs:
-%       P_sw_total     : Total switching loss (Turn-ON + Turn-OFF + Recovery) [W].
-%       is_zvs         : Boolean, true if Soft Switching achieved.
-%       t_trans_needed : Time required to slew voltage from 0 to V_DC [s].
-%       E_ratio        : Ratio of Available Inductive Energy to Required Capacitive Energy.
+% Outputs:
+%   P_sw_total     : total switching-related loss [W]
+%   is_zvs         : true if ZVS is achieved
+%   t_trans_needed : time needed to complete node-voltage commutation [s]
+%   E_ratio        : available inductive energy / required capacitive energy
 
-    %% 1. ZVS Feasibility Checks
-    %  To achieve ZVS, the inductor current must discharge the parasitic capacitors
-    %  of the bridge leg BEFORE the dead time expires.
+    %% 1. ZVS FEASIBILITY CHECKS
+    % Before calculating switching loss, first check whether the bridge leg
+    % can achieve ZVS.
+    %
+    % In a DAB leg, after one switch turns off, the inductor current must:
+    %   - discharge one device capacitance
+    %   - charge the opposite device capacitance
+    % before the complementary gate signal arrives.
+    %
+    % So ZVS needs:
+    %   (a) enough energy
+    %   (b) enough time within dead time
 
-    %  --- A. Energy Check (Full Bridge Scope) ---
-    %  Total energy required to charge/discharge all 4 switches (2 legs) in an SPS transition.
-    %  E_req = 4 * (0.5 * C_oss * V^2) = 2 * C_oss * V^2
- 
-    E_req_total = s.Coss * (V_DC^2); % LEG-scope energy requirement
+    % --- A. ENERGY CHECK ---
+    % Required capacitive energy for one half-bridge node transition.
+    %
+    % For a half-bridge leg, two device output capacitances participate,
+    % and the energy needed is approximated here as:
+    %
+    %   E_req_total ≈ Coss * V_DC^2
+    %
+    % This is a simplified leg-scope approximation.
+    E_req_total = s.Coss * (V_DC^2);
 
-    %  Energy available in the leakage/commutation inductance at the switching instant.
+    % Available inductive energy stored in the commutation/leakage inductance
+    % at the switching instant:
+    %
+    %   E_avail = 1/2 * L_comm * I_sw^2
     E_avail = 0.5 * L_comm * (I_sw^2);
-    
-    %  Metric for plotting: Values > 1 indicate sufficient energy is present.
-    E_ratio = E_avail / E_req_total; 
-    
-    %  --- B. Timing Check (Leg Transition Scope) ---
-    %  The voltage transition is driven by I_sw charging the equivalent node capacitance.
-    %  In a half-bridge, C_top and C_bot appear in parallel during the dead time.
+
+    % Ratio used as a convenient ZVS margin metric.
+    % If E_ratio > 1, there is enough inductive energy in principle.
+    E_ratio = E_avail / E_req_total;
+
+    % --- B. TIMING CHECK ---
+    % Equivalent switch-node capacitance during dead time.
+    % In a half-bridge, both top and bottom device Coss appear in the
+    % commutation process, so:
+    %
+    %   C_node_eq ≈ 2 * Coss
     C_node_eq = 2 * s.Coss;
-    
-    %  Calculate transition time assuming constant current source behavior: dt = (C * dV) / I
-    if I_sw > 0.1 
+
+    % Required transition time assuming the commutation current is roughly
+    % constant while slewing the switch node:
+    %
+    %   t_trans_needed = C * V / I
+    %
+    % If current is too small, set transition time to a huge number.
+    if I_sw > 0.1
         t_trans_needed = (C_node_eq * V_DC) / I_sw;
     else
-        t_trans_needed = 1e9; % Effectively infinite time if current is near zero
+        t_trans_needed = 1e9; % effectively impossible transition
     end
-    
-    %% 3. Combined ZVS Condition
-    %  ZVS is ONLY achieved if:
-    %  1. We have enough energy (E_avail > E_req) AND
-    %  2. The transition completes within the dead time window (t_trans < t_dead).
+
+    %% 2. COMBINED ZVS DECISION
+    % ZVS is achieved only if BOTH conditions hold:
+    %   1) enough energy
+    %   2) transition completes inside the available dead time
     if (E_avail > E_req_total) && (t_trans_needed < t_dead)
-        % --- Case A: Soft Switching (ZVS) ---
+
+        % --- CASE A: ZVS SUCCESS ---
         is_zvs = true;
-        
-        %  In ZVS, the body diode clamps V_ds to ~0V before the gate turns on.
-        %  Therefore, Turn-ON overlap loss is eliminated.
-        P_on = 0; 
-        
-        %  Since the diode is already conducting forward current, there is no
-        %  reverse voltage snap-off event. Recovery loss is negligible.
-        P_rr = 0; 
+
+        % In ideal ZVS, the node voltage is already slewed before turn-on,
+        % so there is no V*I overlap during turn-on.
+        P_on = 0;
+
+        % Also assume reverse-recovery loss is negligible because the body
+        % diode / reverse-conduction path is already conducting naturally.
+        P_rr = 0;
+
     else
-        % --- Case B: Hard Switching ---
+
+        % --- CASE B: HARD TURN-ON ---
         is_zvs = false;
-        
-        %  --- Turn-ON Loss (Hard) ---
-        %  Gate Driver charging Input Capacitance (C_iss)
-        term_start = abs(s.V_dr_on - s.V_gs_th);      % Voltage to cross Threshold
-        term_end   = abs(s.V_dr_on - s.V_plateau);    % Voltage to reach Plateau
-        
-        %  [Eq. 25] Current Rise Time (t_RI): t = Rg * Ciss * ln(V_start/V_end)
-        %  'max' prevents log(0) or division by zero errors for ideal parameters.
+
+        % Turn-on current-rise interval estimate from gate-drive RC charging.
+        %
+        % Gate must rise from threshold toward Miller plateau:
+        term_start = abs(s.V_dr_on - s.V_gs_th);
+        term_end   = abs(s.V_dr_on - s.V_plateau);
+
+        % Approximate current-rise time:
+        %
+        %   t_RI = Rg * Ciss * ln(Vstart / Vend)
+        %
+        % This is a rough gate-charge/RC-based estimate.
         t_RI = s.Rg * s.Ciss * log(term_start / max(term_end, 1e-3));
-        
-        %  [Eq. 16] Current Slope (di/dt) during turn-on
-        a_iD = max(I_sw / t_RI, 1e6); 
-        
-        %  --- Diode Reverse Recovery ---
-        %  The complementary body diode must be forced off, causing a recovery current spike.
+
+        % Current slope during turn-on:
+        %
+        %   a_iD = di/dt ≈ I_sw / t_RI
+        %
+        % Floor value added to avoid division instability.
+        a_iD = max(I_sw / t_RI, 1e6);
+
+        % --- DIODE REVERSE RECOVERY MODEL ---
+        % If the opposite body diode had been conducting, hard turn-on must
+        % commutate that diode off, causing reverse recovery.
         d = s.diode;
-        
-        %  [Eq. 26] Scale t_rr based on current (I_sw) and slope (di/dt) vs datasheets
-        scale_trr = -0.15 * (a_iD / d.didt_ref) + 0.20 * (I_sw / d.Io_ref) + 0.9;
+
+        % Scale reverse-recovery time from datasheet reference values.
+        % This is an empirical approximation.
+        scale_trr = -0.15 * (a_iD / d.didt_ref) + ...
+                     0.20 * (I_sw / d.Io_ref) + 0.9;
         t_RR = d.trr_ref * scale_trr;
-        
-        %  [Eq. 27] Scale Peak Reverse Current (I_rm)
-        scale_Irm = 0.2 * d.Irm_ref * (I_sw / d.Io_ref + 1.25) * (a_iD / d.didt_ref + 1);
+
+        % Scale peak reverse-recovery current from datasheet reference values.
+        % Also empirical.
+        scale_Irm = 0.2 * d.Irm_ref * ...
+                    (I_sw / d.Io_ref + 1.25) * ...
+                    (a_iD / d.didt_ref + 1);
         I_RM = scale_Irm;
-        
-        %  --- Effective Transition Times ---
-        %  [Eq. 28] Rise Time with Recovery: Extends t_RI to account for I_RM spike.
+
+        % --- EFFECTIVE TURN-ON TRANSITION SHAPING ---
+        % Recovery current extends the current-rise interval.
         t_RI_prime = t_RI + (abs(I_RM) / a_iD);
-        
-        %  [Eq. 29] Voltage Fall Time (t_FV): Occurs after diode recovers.
+
+        % Voltage-fall interval after recovery starts.
         t_FV = max(t_RR - (abs(I_RM) / a_iD), 0);
-        
-        %  --- Energy Integration ---
-        %  [Eq. 31] Turn-ON Energy (E_on): Linear approximation of V*I overlap.
-        %  Includes load current I_sw plus the reverse recovery spike I_RM.
-        E_on = V_DC * ( (t_RI_prime/2)*(I_sw + abs(I_RM)) + t_FV*(I_sw/2 + abs(I_RM)/3) );
+
+        % --- HARD TURN-ON ENERGY ---
+        % Linearized overlap-energy approximation.
+        %
+        % First term: current rise including recovery-current contribution
+        % Second term: voltage fall interval
+        E_on = V_DC * ( (t_RI_prime/2) * (I_sw + abs(I_RM)) + ...
+                        t_FV * (I_sw/2 + abs(I_RM)/3) );
         P_on = E_on * f_sw;
-        
-        %  [Eq. 32] Reverse Recovery Energy (E_rr): Loss inside the diode/circuit.
+
+        % Reverse-recovery energy term
         E_rr = (V_DC * abs(I_RM) * t_FV) / 6;
         P_rr = E_rr * f_sw;
     end
-    
-    %% 4. Turn-OFF Loss (Always Hard)
-    %  In DAB (SPS), turn-off always interrupts peak current, forcing a hard voltage rise.
-    
-    %  Voltage Rise Time (t_RV): Charging C_rss (Miller Cap) from Plateau to Off.
+
+    %% 3. TURN-OFF LOSS
+    % In SPS DAB, turn-off is usually treated as hard switching because the
+    % device is turning off while carrying current and the voltage rises.
+    %
+    % Turn-off loss is modeled by:
+    %   - voltage rise interval (Miller region)
+    %   - current fall interval
+
+    % Voltage-rise time while charging the Miller capacitance Crss:
     denom_rv = abs(s.V_plateau - s.V_dr_off);
     t_RV = (s.Rg * s.Crss * V_DC) / max(denom_rv, 1e-3);
-    
-    %  Current Fall Time (t_FI): Discharging C_iss from Plateau to Threshold.
+
+    % Current-fall time while the gate discharges from plateau to threshold:
     term_start = abs(s.V_dr_off - s.V_plateau);
     term_end   = abs(s.V_dr_off - s.V_gs_th);
     t_FI = s.Rg * s.Ciss * log(max(term_start, 1e-3) / max(term_end, 1e-3));
-    
-    %  [Eq. 36] Turn-OFF Energy (E_off): Overlap of rising V and falling I.
+
+    % Turn-off overlap energy:
+    %
+    %   E_off = (V * I / 2) * (t_RV + t_FI)
     E_off = (V_DC * I_sw / 2) * (t_RV + t_FI);
     P_off = E_off * f_sw;
 
-    %% 5. Total Loss Summation
+    %% 4. TOTAL SWITCHING LOSS
+    % Total = turn-on + reverse-recovery + turn-off
     P_sw_total = P_on + P_rr + P_off;
 end
