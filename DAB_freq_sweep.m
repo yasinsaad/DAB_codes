@@ -3,7 +3,7 @@
 clear; clc; close all;
 
 %% --- 1. CONFIGURATION ---
-model_name = 'DAB_freq_sweep_sim'; 
+model_name = 'DAB_freq_sweep_sim';
 target_power = 25000;              % 25 kW Nominal
 headroom_factor = 1.2;             % Design for 30 kW Peak
 freq_steps = (10:10:120) * 1e3;    % Frequency Sweep (10kHz to 180kHz)
@@ -20,32 +20,33 @@ semi.timing.t_dead_off = 90e-9;
 [semi.hv, semi.lv] = get_semiconductor_params('SiC_1200V', 'Si_60V');
 
 % C. Passives
-passives.Rs = 1e6; 
+passives.Rs = 1e6;
 passives.hv.R_cab = 5e-3;   passives.hv.L_cab = 2e-6;   passives.hv.C_bulk = 470e-6;
 passives.lv.R_cab = 0.1e-3; passives.lv.L_cab = 100e-9; passives.lv.C_bulk = 4e-3;
 
 % D. Transformer
 trans.V1 = 16; trans.V2 = 1; trans.n = trans.V2/trans.V1;
 trans.Vin = 800; trans.Vout = 48;
+trLoss.C_wave = 1.2; % start here, tune later
 
-
-% --- Magnetization branch initialization (CRITICAL) ---
-Lm = 1e6;        % H (constant magnetizing inductance)
-Rm = 1e6;          % Ohm (dummy initial value, overwritten later)
+% --- Magnetization branch initialization  ---
+Lm = 0.002;        % H (constant magnetizing inductance)
+Rm = 10e3;          % Ohm
 Tr1=0.004;
 Tr2=0.003;
 target_powertrans = 30000;
-% --- Core parameters (you already have these) ---
+% --- Core parameters  ---
 trLoss.V_core = 1.2e-4;
 trLoss.A_core = 8e-4;
 trLoss.N_pri  = 16;
 
-% --- Material point (you already have these) ---
-trLoss.Ks    = 200000;  
+
+% --- Material point  ---
+trLoss.Ks    = 200000;
 trLoss.alpha = 1.6;
 trLoss.beta  = 2.2;
 
-% --- Winding AC resistances (YOU MUST SET THESE properly) ---
+% --- Winding AC resistances  ---
 trLoss.Rac_pri = 4e-3;
 trLoss.Rac_sec = 0.3e-3;
 
@@ -61,6 +62,13 @@ data_loss_tr_cu  = zeros(1, num_points);
 data_loss_tr_tot = zeros(1, num_points);
 data_Lk = zeros(1, num_points);
 data_Rm = zeros(1, num_points);
+% --- Extra Magnetics Diagnostics ---
+data_Bpk_T   = zeros(1, num_points);
+data_Ac_T    = zeros(1, num_points);
+data_VT_core = zeros(1, num_points);
+data_VL_core = zeros(1, num_points);
+data_sat_T   = false(1, num_points);   % saturation / invalid flag
+Bmax_T_used  = 0.25;                   % MUST match optsSize.Bmax_T
 
 % Current Metrics
 results.I_rms_h = zeros(1, num_points);
@@ -70,7 +78,7 @@ results.I_sw_ss_l = zeros(1, num_points);
 results.I_peak_h_global = zeros(1, num_points); % Transient
 results.I_peak_l_global = zeros(1, num_points);
 
-% ZVS Physics Metrics (For Figure 5)
+% ZVS Physics Metrics
 results.zvs_margin_h = zeros(1, num_points); % Energy Ratio
 results.t_trans_h = zeros(1, num_points);    % Required Transition Time
 
@@ -98,7 +106,7 @@ assignin('base', 'R_s',     passives.Rs);
 
 assignin('base', 'V1', trans.V1);   assignin('base', 'V2', trans.V2);
 assignin('base', 'Vin', trans.Vin); assignin('base', 'Vout', trans.Vout);
-assignin('base', 'n', trans.n); 
+assignin('base', 'n', trans.n);
 assignin('base','Lm',Lm);
 assignin('base','Rm',Rm);
 
@@ -110,24 +118,24 @@ fprintf('Starting Sweep (Target: %.1f kW)...\n', target_power/1e3);
 for i = 1:num_points
     f_sw_curr = freq_steps(i);
     T_curr = 1 / f_sw_curr;
-    
+
     %% A. Dynamic Lk Calculation
     P_max_req = target_power * headroom_factor;
     Lk_opt = (trans.Vin * trans.Vout) / (8 * trans.n * f_sw_curr * P_max_req);
-    
+
     assignin('base', 'Lk', Lk_opt);
     assignin('base', 'T', T_curr);
-    
+
     %% B. Control Calculation
     try
         Delay_Sweep = findDABDelay(trans.Vin, trans.Vout, target_power, trans.n, Lk_opt, f_sw_curr);
-        assignin('base', 'Delay', Delay_Sweep); 
-        
+        assignin('base', 'Delay', Delay_Sweep);
+
     catch
         fprintf(' [Error] Control calc failed at %.1f kHz\n', f_sw_curr/1e3);
         continue;
     end
-    
+
     %% C. Run Simulation
     try
         simOut = sim(model_name,'StopTime',num2str(sim_time));
@@ -136,7 +144,7 @@ for i = 1:num_points
         disp(ME.message);
         continue;
     end
-    
+
     %% D. Extract Data
     try
         I_raw_h = simOut.I_raw_h.Data; I_raw_l = simOut.I_raw_l.Data;
@@ -144,73 +152,107 @@ for i = 1:num_points
     catch
         error('Variable Name Mismatch: Check "To Workspace" block names!');
     end
-    
+
     % Steady State Slice (Last 50%)
     idx = floor(length(I_raw_h) * 0.5);
     I_ss_h = I_raw_h(idx:end); I_ss_l = I_raw_l(idx:end);
     I_ss_in = I_raw_in(idx:end); I_ss_out = I_raw_out(idx:end);
-    
+
     % Metrics
     I_rms_h = rms(I_ss_h); I_rms_l = rms(I_ss_l);
     I_rms_in = rms(I_ss_in); I_rms_out = rms(I_ss_out);
-    
+
     % Switching Peaks (Steady State)
-    I_sw_ss_h = max(abs(I_ss_h)); 
-    I_sw_ss_l = max(abs(I_ss_l)); 
-    
+    I_sw_ss_h = max(abs(I_ss_h));
+    I_sw_ss_l = max(abs(I_ss_l));
+
     % Global Peaks (Transient)
     I_peak_h_global = max(abs(I_raw_h));
     I_peak_l_global = max(abs(I_raw_l));
-    
+
     % --- 1. Conduction & Passive Losses ---
     P_cond = 4*(I_rms_h^2 * semi.hv.Ron) + 4*(I_rms_l^2 * semi.lv.Ron);
     P_cab  = 2*(I_rms_in^2 * passives.hv.R_cab) + 2*(I_rms_out^2 * passives.lv.R_cab);
     P_gate = (4 * semi.hv.Qg * semi.hv.V_dr_on * f_sw_curr) + ...
-             (4 * semi.lv.Qg * semi.lv.V_dr_on * f_sw_curr);
-    
+        (4 * semi.lv.Qg * semi.lv.V_dr_on * f_sw_curr);
+
     % --- 2. Switching Losses (Analytical w/ ZVS & Time Check) ---
     % HV Side
     [P_sw_h_unit, zvs_h, t_req_h, E_rat_h] = calculate_switching_zvs(trans.Vin, I_sw_ss_h, f_sw_curr, Lk_opt, semi.hv, semi.timing.t_dead_on);
     % LV Side (Reflect Lk by MULTIPLYING n^2)
     [P_sw_l_unit, zvs_l, ~, ~] = calculate_switching_zvs(trans.Vout, I_sw_ss_l, f_sw_curr, Lk_opt * (trans.n^2), semi.lv, semi.timing.t_dead_on);
-    
+
     P_sw_total = 4 * P_sw_h_unit + 4 * P_sw_l_unit;
-    
+
     % --- 3. Worst Case Reference ---
     P_sw_wc = 4 * f_sw_curr * 0.5 * (trans.Vin * I_rms_h + trans.Vout * I_rms_l) * ...
-              (semi.timing.t_dead_on + semi.timing.t_dead_off);
+        (semi.timing.t_dead_on + semi.timing.t_dead_off);
     t_dead_total = semi.timing.t_dead_on + semi.timing.t_dead_off;
 
-% Body diode losses (use commutation current, not RMS)
-[P_body, P_body_h, P_body_l] = calculateBodyDiodeLosses( ...
-    I_sw_ss_h, I_sw_ss_l, semi.hv.Vf, semi.lv.Vf, f_sw_curr, t_dead_total);
+    % --- Calculate Magnetic Size ---
+    % Conversion: Phase(rad) = Delay(ratio) * pi or Delay(sec) * 2*pi*f
+    % Assuming 'Delay_Sweep' from findDABDelay is in SECONDS:
+    phase_rad = Delay_Sweep * 2 * pi * f_sw_curr;
+    optsSize = struct();
+    optsSize.n_def  = 'Ns_over_Np';  % because your trans.n = V2/V1 = Ns/Np
+    optsSize.Np     = trLoss.N_pri;  % 16
+    optsSize.Bmax_T = 0.25;          % pick your design target
+    optsSize.Bmax_L = 0.30;
+    optsSize.ku_L   = 0.40;
+    optsSize.kT     = 6.0;
 
-data_loss_body(i)   = P_body;
-data_loss_body_h(i) = P_body_h;
-data_loss_body_l(i) = P_body_l;
+    S = dab_size_calc_v2(f_sw_curr, trans.Vin, trans.Vout, target_power, trans.n, phase_rad, I_peak_h_global, optsSize);
 
-   % --- 4.Transformer Losses ---  
-[P_core, P_cu, P_tr, Rm_dyn, B_pk] = calculateTransformerLosses( ...
-    f_sw_curr, trans.Vin, I_rms_h, I_rms_l, ...
-    trLoss.V_core, trLoss.A_core, trLoss.N_pri, ...
-    trLoss.Ks, trLoss.alpha, trLoss.beta, ...
-    trLoss.Rac_pri, trLoss.Rac_sec, true);
+    results.Vol_L(i)     = S.V_L_core * 1e6;    % m^3 -> cm^3
+    results.Vol_T(i)     = S.V_T_core * 1e6;
+    results.Vol_Total(i) = S.V_total  * 1e6;
 
-assignin('base','Rm',Rm_dyn);
+    % --- Store sizing diagnostics ---
+    data_Bpk_T(i)   = S.Bpk_T;
+    data_Ac_T(i)    = S.Ac_req_T;
+    data_VT_core(i) = S.V_T_core;
+    data_VL_core(i) = S.V_L_core;
 
-data_loss_core(i) = P_core;        % Core loss
-data_loss_tr_cu(i) = P_cu;         % Copper loss
-data_loss_tr_tot(i) = P_tr;        % Total transformer loss     
-data_Lk(i) = Lk_opt;  % Store leakage inductance
-data_Rm(i) = Rm_dyn;  % Store magnetization resistance
+    % saturation/invalid: compare Bpk to Bmax target
+    data_sat_T(i)   = (S.Bpk_T > Bmax_T_used*1.001); % small tolerance
+
+    % Body diode losses (use commutation current, not RMS)
+    tdead_h = semi.timing.t_dead_on + semi.timing.t_dead_off;
+    tdead_l = tdead_h;  % (or separate if you actually use different dead-times)
+
+    k_zvs = 0.1;  % 10% of dead-time as "effective diode conduction" when ZVS is achieved (tune)
+
+    t_eff_h = (zvs_h) * (k_zvs*tdead_h) + (~zvs_h) * (tdead_h);
+    t_eff_l = (zvs_l) * (k_zvs*tdead_l) + (~zvs_l) * (tdead_l);
+
+    [P_body, P_body_h, P_body_l] = calculateBodyDiodeLosses( ...
+        I_sw_ss_h, I_sw_ss_l, semi.hv.Vf, semi.lv.Vf, f_sw_curr, t_eff_h, t_eff_l);
+
+
+    data_loss_body(i)   = P_body;
+    data_loss_body_h(i) = P_body_h;
+    data_loss_body_l(i) = P_body_l;
+
+    % --- 4.Transformer Losses ---
+    [P_core, P_cu, P_tr, Rm_dyn, B_pk] = calculateTransformerLosses( ...
+        f_sw_curr, trans.Vin, I_rms_h, I_rms_l, ...
+        S.V_T_core, S.Ac_req_T, trLoss.N_pri, ...
+        trLoss.Ks, trLoss.alpha, trLoss.beta, ...
+        trLoss.Rac_pri, trLoss.Rac_sec, trLoss.C_wave, true);
+
+    data_loss_core(i) = P_core;        % Core loss
+    data_loss_tr_cu(i) = P_cu;         % Copper loss
+    data_loss_tr_tot(i) = P_tr;        % Total transformer loss
+    data_Lk(i) = Lk_opt;  % Store leakage inductance
+    data_Rm(i) = Rm_dyn;  % Store magnetization resistance
     % --- Store Results ---
     results.freq(i) = f_sw_curr;
-  results.loss_total(i) = P_cond + P_cab + P_gate + P_sw_total + P_body + P_tr;
+    results.loss_total(i) = P_cond + P_cab + P_gate + P_sw_total + P_body + P_tr;
     results.eff_analytical(i) = 100 * target_power / (target_power + results.loss_total(i));
     results.eff_worst_case(i) = 100 * target_power / (target_power + P_cond + P_cab + P_gate + P_sw_wc);
     results.breakdown(:, i) = [P_cond; P_cab; P_gate; P_sw_total; P_body];
     results.delay(i) = Delay_Sweep;
-    
+
     % Save Metrics for Plotting
     results.I_rms_h(i) = I_rms_h;
     results.I_rms_l(i) = I_rms_l;
@@ -218,27 +260,15 @@ data_Rm(i) = Rm_dyn;  % Store magnetization resistance
     results.I_sw_ss_l(i) = I_sw_ss_l;
     results.I_peak_h_global(i) = I_peak_h_global;
     results.I_peak_l_global(i) = I_peak_l_global;
-    
+
     % Save Physics Metrics
     results.zvs_margin_h(i) = E_rat_h;
     results.t_trans_h(i) = t_req_h;
 
-    % --- Calculate Magnetic Size ---
-    % Conversion: Phase(rad) = Delay(ratio) * pi or Delay(sec) * 2*pi*f
-    % Assuming 'Delay_Sweep' from findDABDelay is in SECONDS:
-    phase_rad = Delay_Sweep * 2 * pi * f_sw_curr;
-    
-    [v_L, v_T, v_tot, ~] = dab_size_calc(f_sw_curr, trans.Vin, trans.Vout, ...
-                                         target_power, trans.n, phase_rad, I_peak_h_global);
-                                     
-    results.Vol_L(i) = v_L * 1e6;     % Convert m^3 to cm^3 for easier reading
-    results.Vol_T(i) = v_T * 1e6;     % Convert m^3 to cm^3
-    results.Vol_Total(i) = v_tot * 1e6;
-    
     fprintf(' %.1f kHz | Lk:%.1fuH | I_sw: %.1fA | Eff: %.2f%% | ZVS: H:%d L:%d\n', ...
         f_sw_curr/1e3, Lk_opt/1e-6, I_sw_ss_l, results.eff_analytical(i), zvs_h, zvs_l);
-end
 
+end
 
 %% --- 4. EXTENDED PLOTTING SUITE (CLEAN) ---
 
@@ -271,7 +301,7 @@ Pcu   = data_loss_tr_cu(valid);  Pcu   = Pcu(idxS);
 Ptr   = data_loss_tr_tot(valid); Ptr   = Ptr(idxS);
 
 % Breakdown matrix assumed: [Cond; Cab; Gate; Switching; Body]
-BD = results.breakdown(:,valid); 
+BD = results.breakdown(:,valid);
 BD = BD(:,idxS);
 
 %% === FIGURE 1: OVERVIEW (4-panels) ===
@@ -373,3 +403,48 @@ bar(f_kHz, LossMatPct, 'stacked'); grid on;
 xlabel('Frequency (kHz)'); ylabel('Loss Share (%)');
 legend('MOSFET Cond','Cables','Gate','Switching','Body diode','Transformer','Location','best');
 title('Loss Breakdown (Percentage)');
+
+% === FIGURE 7: Transformer Bpk & Saturation Region ===
+figure('Color','w', 'Name', 'Transformer Flux (Bpk)', 'Position', [350 120 900 420]);
+
+Bpk = data_Bpk_T(valid); Bpk = Bpk(idxS);
+sat = data_sat_T(valid); sat = sat(idxS);
+
+plot(f_kHz, Bpk, 'o-','LineWidth',2,'MarkerSize',6); hold on;
+yline(Bmax_T_used, '--','LineWidth',1.8);
+grid on;
+xlabel('Frequency (kHz)'); ylabel('B_{pk} (T)');
+title('Transformer Peak Flux Density vs Frequency');
+legend('B_{pk}','B_{max} target','Location','best');
+
+% Highlight saturated/invalid points
+if any(sat)
+    scatter(f_kHz(sat), Bpk(sat), 80, 'filled');
+    legend('B_{pk}','B_{max} target','Saturated/Invalid','Location','best');
+end
+% === FIGURE 8: Transformer Core Area Requirement ===
+figure('Color','w', 'Name', 'Transformer Core Area', 'Position', [380 150 900 420]);
+
+Ac = data_Ac_T(valid); Ac = Ac(idxS);
+
+plot(f_kHz, Ac*1e4, 's-','LineWidth',2,'MarkerSize',6); % m^2 -> cm^2
+grid on;
+xlabel('Frequency (kHz)'); ylabel('A_c required (cm^2)');
+title('Required Transformer Core Cross-Section vs Frequency');
+% === FIGURE 9: Core Volumes Separately (Sizing Output) ===
+figure('Color','w', 'Name', 'Core Volumes (Sizing)', 'Position', [410 180 1000 420]);
+tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
+
+VT = data_VT_core(valid); VT = VT(idxS);
+VL = data_VL_core(valid); VL = VL(idxS);
+
+nexttile;
+plot(f_kHz, VT*1e6, 'o-','LineWidth',2,'MarkerSize',6);
+grid on; xlabel('Frequency (kHz)'); ylabel('Transformer Core Volume (cm^3)');
+title('Transformer Core Volume');
+
+nexttile;
+plot(f_kHz, VL*1e6, 'o-','LineWidth',2,'MarkerSize',6);
+grid on; xlabel('Frequency (kHz)'); ylabel('Inductor Core Volume (cm^3)');
+title('Inductor Core Volume');
+

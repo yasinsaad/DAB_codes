@@ -25,8 +25,9 @@ function [P_sw_total, is_zvs, t_trans_needed, E_ratio] = calculate_switching_zvs
     %  --- A. Energy Check (Full Bridge Scope) ---
     %  Total energy required to charge/discharge all 4 switches (2 legs) in an SPS transition.
     %  E_req = 4 * (0.5 * C_oss * V^2) = 2 * C_oss * V^2
-    E_req_total = 2 * s.Coss * (V_DC^2); 
-    
+ 
+    E_req_total = s.Coss * (V_DC^2); % LEG-scope energy requirement
+
     %  Energy available in the leakage/commutation inductance at the switching instant.
     E_avail = 0.5 * L_comm * (I_sw^2);
     
