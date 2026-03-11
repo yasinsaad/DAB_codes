@@ -7,14 +7,17 @@ model_name = 'DAB_freq_sweep_sim';
 target_power = 25000;              % 25 kW Nominal
 headroom_factor = 1.2;             % Design for 30 kW Peak
 freq_steps = (10:10:120) * 1e3;    % Frequency Sweep (10kHz to 180kHz)
-num_points = length(freq_steps);
+num_sweep = length(freq_steps);
 sim_time = 0.03;
 
 %% --- 2. PARAMETERS ---
 
 % A. Semiconductor Global Timing
-semi.timing.t_dead_on  = 30e-9;
-semi.timing.t_dead_off = 90e-9;
+semi.hv.timing.t_dead_on  = 30e-9; % update these @saquib
+semi.hv.timing.t_dead_off= 90e-9;
+semi.lv.timing.t_dead_on  = 30e-9; % update these @saquib
+semi.lv.timing.t_dead_off= 90e-9;
+
 
 % B. Load Semiconductor Profiles (Embedded Local Function)
 [semi.hv, semi.lv] = get_semiconductor_params('SiC_1200V', 'Si_60V');
@@ -26,62 +29,65 @@ passives.lv.R_cab = 0.1e-3; passives.lv.L_cab = 100e-9; passives.lv.C_bulk = 4e-
 
 % D. Transformer
 trans.V1 = 16; trans.V2 = 1; trans.n = trans.V2/trans.V1;
-trans.Vin = 800; trans.Vout = 48;
+% Source
+source.Vin = 800; source.Vout = 48;
 
 
 % --- Magnetization branch initialization (CRITICAL) ---
-Lm = 1e6;        % H (constant magnetizing inductance)
-Rm = 1e6;          % Ohm (dummy initial value, overwritten later)
-Tr1=0.004;
+trans.Lm = 1e6;        % H (constant magnetizing inductance)
+trans.Rm = 1e6;          % Ohm (dummy initial value, overwritten later) @saquib, not overwritten later
+Tr1=0.004; % @saquib what are these
 Tr2=0.003;
-target_powertrans = 30000;
-% --- Core parameters (you already have these) ---
+trans.power = target_power*headroom_factor;
+% --- Core parameters (you already have these) --- 
+% these may be redundant
+% @saquib
 trLoss.V_core = 1.2e-4;
 trLoss.A_core = 8e-4;
 trLoss.N_pri  = 16;
 
-% --- Material point (you already have these) ---
+% --- Material point (you already have these) --- @saquib source ??!
 trLoss.Ks    = 200000;  
 trLoss.alpha = 1.6;
 trLoss.beta  = 2.2;
 
-% --- Winding AC resistances (YOU MUST SET THESE properly) ---
+% --- Winding AC resistances (YOU MUST SET THESE properly) --- @saquib source ??!
 trLoss.Rac_pri = 4e-3;
 trLoss.Rac_sec = 0.3e-3;
 
 % --- Initialize Data Arrays ---
-results.freq = zeros(1, num_points);
-results.eff_analytical = zeros(1, num_points);
-results.eff_worst_case = zeros(1, num_points);
-results.loss_total = zeros(1, num_points);
-results.breakdown = zeros(5, num_points);
-results.delay = zeros(1, num_points);
-data_loss_core   = zeros(1, num_points);
-data_loss_tr_cu  = zeros(1, num_points);
-data_loss_tr_tot = zeros(1, num_points);
-data_Lk = zeros(1, num_points);
-data_Rm = zeros(1, num_points);
+results.freq = zeros(1, num_sweep);
+results.eff_analytical = zeros(1, num_sweep);
+results.eff_worst_case = zeros(1, num_sweep);
+results.loss_total = zeros(1, num_sweep);
+results.breakdown = zeros(5, num_sweep);
+results.delay = zeros(1, num_sweep);
+data_loss_core   = zeros(1, num_sweep);
+data_loss_tr_cu  = zeros(1, num_sweep);
+data_loss_tr_tot = zeros(1, num_sweep);
+data_Lk = zeros(1, num_sweep);
+data_Rm = zeros(1, num_sweep);
 
 % Current Metrics
-results.I_rms_h = zeros(1, num_points);
-results.I_rms_l = zeros(1, num_points);
-results.I_sw_ss_h = zeros(1, num_points); % Switching Instant Current
-results.I_sw_ss_l = zeros(1, num_points);
-results.I_peak_h_global = zeros(1, num_points); % Transient
-results.I_peak_l_global = zeros(1, num_points);
+results.I_rms_h = zeros(1, num_sweep);
+results.I_rms_l = zeros(1, num_sweep);
+results.I_sw_ss_h = zeros(1, num_sweep); % Switching Instant Current
+results.I_sw_ss_l = zeros(1, num_sweep);
+results.I_peak_h_global = zeros(1, num_sweep); % Transient
+results.I_peak_l_global = zeros(1, num_sweep);
 
 % ZVS Physics Metrics (For Figure 5)
-results.zvs_margin_h = zeros(1, num_points); % Energy Ratio
-results.t_trans_h = zeros(1, num_points);    % Required Transition Time
+results.zvs_margin_h = zeros(1, num_sweep); % Energy Ratio
+results.t_trans_h = zeros(1, num_sweep);    % Required Transition Time
 
 % --- Magnetic Sizing Data ---
-results.Vol_L = zeros(1, num_points);      % Inductor Volume
-results.Vol_T = zeros(1, num_points);      % Transformer Volume
-results.Vol_Total = zeros(1, num_points);  % Total Volume
+results.Vol_L = zeros(1, num_sweep);      % Inductor Volume
+results.Vol_T = zeros(1, num_sweep);      % Transformer Volume
+results.Vol_Total = zeros(1, num_sweep);  % Total Volume
 %Body diode losses
-data_loss_body = zeros(1, num_points);
-data_loss_body_h = zeros(1, num_points);
-data_loss_body_l = zeros(1, num_points);
+data_loss_body = zeros(1, num_sweep);
+data_loss_body_h = zeros(1, num_sweep);
+data_loss_body_l = zeros(1, num_sweep);
 
 % --- PUSH PARAMS TO SIMULINK WORKSPACE ---
 assignin('base', 'R_on_h', semi.hv.Ron);  assignin('base', 'R_on_l', semi.lv.Ron);
@@ -96,38 +102,36 @@ assignin('base', 'R_cab_l', passives.lv.R_cab); assignin('base', 'L_cab_l', pass
 assignin('base', 'C_bulk_l',passives.lv.C_bulk);
 assignin('base', 'R_s',     passives.Rs);
 
-assignin('base', 'V1', trans.V1);   assignin('base', 'V2', trans.V2);
-assignin('base', 'Vin', trans.Vin); assignin('base', 'Vout', trans.Vout);
+assignin('base', 'Vin', source.Vin); assignin('base', 'Vout', source.Vout);
 assignin('base', 'n', trans.n); 
-assignin('base','Lm',Lm);
-assignin('base','Rm',Rm);
 
 assignin('base', 't_on', semi.timing.t_dead_on); assignin('base', 't_off', semi.timing.t_dead_off);
 
 fprintf('Starting Sweep (Target: %.1f kW)...\n', target_power/1e3);
 
 %% --- 3. MAIN SWEEP LOOP ---
-for i = 1:num_points
+for i = 1:num_sweep
     f_sw_curr = freq_steps(i);
     T_curr = 1 / f_sw_curr;
     
     %% A. Dynamic Lk Calculation
     P_max_req = target_power * headroom_factor;
-    Lk_opt = (trans.Vin * trans.Vout) / (8 * trans.n * f_sw_curr * P_max_req);
+    Lk_opt = (source.Vin * source.Vin) / (8 * trans.n * f_sw_curr * P_max_req);
     
     assignin('base', 'Lk', Lk_opt);
     assignin('base', 'T', T_curr);
     
     %% B. Control Calculation
-    try
-        Delay_Sweep = findDABDelay(trans.Vin, trans.Vout, target_power, trans.n, Lk_opt, f_sw_curr);
-        assignin('base', 'Delay', Delay_Sweep); 
-        
-    catch
-        fprintf(' [Error] Control calc failed at %.1f kHz\n', f_sw_curr/1e3);
-        continue;
-    end
-    
+    % not needed for closed loop
+%     try
+%         Delay_Sweep = findDABDelay(source.Vin, source.Vin, target_power, trans.n, Lk_opt, f_sw_curr);
+%         assignin('base', 'Delay', Delay_Sweep); 
+%         
+%     catch
+%         fprintf(' [Error] Control calc failed at %.1f kHz\n', f_sw_curr/1e3);
+%         continue;
+%     end
+%     
     %% C. Run Simulation
     try
         simOut = sim(model_name,'StopTime',num2str(sim_time));
@@ -145,8 +149,8 @@ for i = 1:num_points
         error('Variable Name Mismatch: Check "To Workspace" block names!');
     end
     
-    % Steady State Slice (Last 50%)
-    idx = floor(length(I_raw_h) * 0.5);
+    % Steady State Slice (Last 80%)
+    idx = floor(length(I_raw_h) * 0.8);
     I_ss_h = I_raw_h(idx:end); I_ss_l = I_raw_l(idx:end);
     I_ss_in = I_raw_in(idx:end); I_ss_out = I_raw_out(idx:end);
     
@@ -158,7 +162,7 @@ for i = 1:num_points
     I_sw_ss_h = max(abs(I_ss_h)); 
     I_sw_ss_l = max(abs(I_ss_l)); 
     
-    % Global Peaks (Transient)
+    % Global Peaks (Transient) % not needed actually
     I_peak_h_global = max(abs(I_raw_h));
     I_peak_l_global = max(abs(I_raw_l));
     
@@ -170,39 +174,39 @@ for i = 1:num_points
     
     % --- 2. Switching Losses (Analytical w/ ZVS & Time Check) ---
     % HV Side
-    [P_sw_h_unit, zvs_h, t_req_h, E_rat_h] = calculate_switching_zvs(trans.Vin, I_sw_ss_h, f_sw_curr, Lk_opt, semi.hv, semi.timing.t_dead_on);
+    [P_sw_h_unit, zvs_h, t_req_h, E_rat_h] = calculate_switching_zvs(source.Vin, I_sw_ss_h, f_sw_curr, Lk_opt, semi.hv, semi.timing.t_dead_on);
     % LV Side (Reflect Lk by MULTIPLYING n^2)
-    [P_sw_l_unit, zvs_l, ~, ~] = calculate_switching_zvs(trans.Vout, I_sw_ss_l, f_sw_curr, Lk_opt * (trans.n^2), semi.lv, semi.timing.t_dead_on);
+    [P_sw_l_unit, zvs_l, ~, ~] = calculate_switching_zvs(source.Vin, I_sw_ss_l, f_sw_curr, Lk_opt * (trans.n^2), semi.lv, semi.timing.t_dead_on);
     
     P_sw_total = 4 * P_sw_h_unit + 4 * P_sw_l_unit;
     
     % --- 3. Worst Case Reference ---
-    P_sw_wc = 4 * f_sw_curr * 0.5 * (trans.Vin * I_rms_h + trans.Vout * I_rms_l) * ...
+    P_sw_wc = 4 * f_sw_curr * 0.5 * (source.Vin * I_rms_h + source.Vin * I_rms_l) * ...
               (semi.timing.t_dead_on + semi.timing.t_dead_off);
     t_dead_total = semi.timing.t_dead_on + semi.timing.t_dead_off;
 
 % Body diode losses (use commutation current, not RMS)
 [P_body, P_body_h, P_body_l] = calculateBodyDiodeLosses( ...
-    I_sw_ss_h, I_sw_ss_l, semi.hv.Vf, semi.lv.Vf, f_sw_curr, t_dead_total);
+    I_sw_ss_h, I_sw_ss_l, semi.hv.Vf, semi.lv.Vf, f_sw_curr, semi.hv.timing.t_dead_off,semi.lv.timing.t_dead_off, 0, 0); % @saquib does commutation current == maximum ss current? Also check function calling, set dead_time consts and what is t_trans_??
 
 data_loss_body(i)   = P_body;
 data_loss_body_h(i) = P_body_h;
 data_loss_body_l(i) = P_body_l;
 
    % --- 4.Transformer Losses ---  
-[P_core, P_cu, P_tr, Rm_dyn, B_pk] = calculateTransformerLosses( ...
-    f_sw_curr, trans.Vin, I_rms_h, I_rms_l, ...
+[P_core, P_cu, P_tr, Rm_dyn, B_pk] = calculateTransformerLosses( ... % @saquib check if the function calling is okay
+    f_sw_curr, source.Vin, I_rms_h, I_rms_l, ...
     trLoss.V_core, trLoss.A_core, trLoss.N_pri, ...
     trLoss.Ks, trLoss.alpha, trLoss.beta, ...
     trLoss.Rac_pri, trLoss.Rac_sec, true);
 
-assignin('base','Rm',Rm_dyn);
+assignin('base','Rm',Rm_dyn); % @saquib Why?
 
 data_loss_core(i) = P_core;        % Core loss
 data_loss_tr_cu(i) = P_cu;         % Copper loss
 data_loss_tr_tot(i) = P_tr;        % Total transformer loss     
 data_Lk(i) = Lk_opt;  % Store leakage inductance
-data_Rm(i) = Rm_dyn;  % Store magnetization resistance
+data_Rm(i) = Rm_dyn;  % Store magnetization resistance @saquib why store these?
     % --- Store Results ---
     results.freq(i) = f_sw_curr;
   results.loss_total(i) = P_cond + P_cab + P_gate + P_sw_total + P_body + P_tr;
@@ -228,8 +232,8 @@ data_Rm(i) = Rm_dyn;  % Store magnetization resistance
     % Assuming 'Delay_Sweep' from findDABDelay is in SECONDS:
     phase_rad = Delay_Sweep * 2 * pi * f_sw_curr;
     
-    [v_L, v_T, v_tot, ~] = dab_size_calc(f_sw_curr, trans.Vin, trans.Vout, ...
-                                         target_power, trans.n, phase_rad, I_peak_h_global);
+    [v_L, v_T, v_tot, ~] = dab_size_calc(f_sw_curr, source.Vin, source.Vin, ...
+                                         target_power, trans.n, phase_rad, I_peak_h_global);  %% @sahib @saquib, this fcn needs to be reworked. We are using a closed loop control, hence no delay param. Also Lk is already calculated, why recalculate it?
                                      
     results.Vol_L(i) = v_L * 1e6;     % Convert m^3 to cm^3 for easier reading
     results.Vol_T(i) = v_T * 1e6;     % Convert m^3 to cm^3
@@ -240,7 +244,7 @@ data_Rm(i) = Rm_dyn;  % Store magnetization resistance
 end
 
 
-%% --- 4. EXTENDED PLOTTING SUITE (CLEAN) ---
+%% --- 4. EXTENDED PLOTTING SUITE (CLEAN) --- %%% Needs reworking
 
 % --- Clean valid points (in case some sweep points failed) ---
 valid = results.freq > 0 & ~isnan(results.eff_analytical);
