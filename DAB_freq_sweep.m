@@ -5,22 +5,22 @@ clear; clc; close all;
 %% --- 1. CONFIGURATION ---
 model_name = 'DAB_freq_sweep_sim'; 
 target_power = 25000;              % 25 kW Nominal
-headroom_factor = 1.2;             % Design for 30 kW Peak
+headroom_factor = 1.3;             % Design for 30 kW Peak
 freq_steps = (10:10:120) * 1e3;    % Frequency Sweep (10kHz to 180kHz)
 num_sweep = length(freq_steps);
-sim_time = 0.03;
-
+sim_time = 0.05;
+max_power = headroom_factor*target_power;
 %% --- 2. PARAMETERS ---
 
-% A. Semiconductor Global Timing
-semi.hv.timing.t_dead_on  = 30e-9; % update these @saquib
-semi.hv.timing.t_dead_off= 90e-9;
-semi.lv.timing.t_dead_on  = 30e-9; % update these @saquib
-semi.lv.timing.t_dead_off= 90e-9;
 
 
 % B. Load Semiconductor Profiles (Embedded Local Function)
 [semi.hv, semi.lv] = get_semiconductor_params('SiC_1200V', 'Si_60V');
+
+% A. Semiconductor Global Timing
+semi.hv.timing.t_dead  = 30e-9; % update these @saquib
+semi.lv.timing.t_dead= 90e-9;
+
 
 % C. Passives
 passives.Rs = 1e6; 
@@ -29,18 +29,18 @@ passives.lv.R_cab = 0.1e-3; passives.lv.L_cab = 100e-9; passives.lv.C_bulk = 4e-
 
 % D. Transformer
 trans.V1 = 16; trans.V2 = 1; trans.n = trans.V2/trans.V1;
+trans.power = max_power;
 % Source
 source.Vin = 800; source.Vout = 48;
 
 
 % --- Magnetization branch initialization (CRITICAL) ---
 trans.Lm = 1e6;        % H (constant magnetizing inductance)
-trans.Rm = 1e6;          % Ohm (dummy initial value, overwritten later) @saquib, not overwritten later
-Tr1=0.004; % @saquib what are these
+trans.Rm = 1e6;          % Ohm (dummy initial value, overwritten later) @saquib, not overwritten later. also provide source
+Tr1=0.004; % @saquib what are these? source?
 Tr2=0.003;
-trans.power = target_power*headroom_factor;
 % --- Core parameters (you already have these) --- 
-% these may be redundant
+% these may be redundant. Also source needed
 % @saquib
 trLoss.V_core = 1.2e-4;
 trLoss.A_core = 8e-4;
@@ -73,13 +73,10 @@ results.I_rms_h = zeros(1, num_sweep);
 results.I_rms_l = zeros(1, num_sweep);
 results.I_sw_ss_h = zeros(1, num_sweep); % Switching Instant Current
 results.I_sw_ss_l = zeros(1, num_sweep);
-results.I_peak_h_global = zeros(1, num_sweep); % Transient
-results.I_peak_l_global = zeros(1, num_sweep);
 
-% ZVS Physics Metrics (For Figure 5)
-results.zvs_margin_h = zeros(1, num_sweep); % Energy Ratio
-results.t_trans_h = zeros(1, num_sweep);    % Required Transition Time
 
+results.t_req_h = zeros(1, num_sweep);    % Required Transition Time
+results.t_req_l = zeros(1, num_sweep);
 % --- Magnetic Sizing Data ---
 results.Vol_L = zeros(1, num_sweep);      % Inductor Volume
 results.Vol_T = zeros(1, num_sweep);      % Transformer Volume
@@ -105,22 +102,17 @@ assignin('base', 'R_s',     passives.Rs);
 assignin('base', 'Vin', source.Vin); assignin('base', 'Vout', source.Vout);
 assignin('base', 'n', trans.n); 
 
-assignin('base', 't_on', semi.timing.t_dead_on); assignin('base', 't_off', semi.timing.t_dead_off);
 
 fprintf('Starting Sweep (Target: %.1f kW)...\n', target_power/1e3);
 
 %% --- 3. MAIN SWEEP LOOP ---
 for i = 1:num_sweep
     f_sw_curr = freq_steps(i);
-    T_curr = 1 / f_sw_curr;
+    T = 1 / f_sw_curr;
     
     %% A. Dynamic Lk Calculation
-    P_max_req = target_power * headroom_factor;
-    Lk_opt = (source.Vin * source.Vin) / (8 * trans.n * f_sw_curr * P_max_req);
-    
-    assignin('base', 'Lk', Lk_opt);
-    assignin('base', 'T', T_curr);
-    
+  Lk = (source.Vin * source.Vout) / (8 * trans.n * f_sw_curr * max_power); 
+     
     %% B. Control Calculation
     % not needed for closed loop
 %     try
@@ -174,27 +166,27 @@ for i = 1:num_sweep
     
     % --- 2. Switching Losses (Analytical w/ ZVS & Time Check) ---
     % HV Side
-    [P_sw_h_unit, zvs_h, t_req_h, E_rat_h] = calculate_switching_zvs(source.Vin, I_sw_ss_h, f_sw_curr, Lk_opt, semi.hv, semi.timing.t_dead_on);
+    [P_sw_h_unit, zvs_h, t_req_h, E_rat_h] = calculate_switching_zvs(source.Vin, I_sw_ss_h, f_sw_curr, Lk, semi.hv, semi.hv.timing.t_dead);
     % LV Side (Reflect Lk by MULTIPLYING n^2)
-    [P_sw_l_unit, zvs_l, ~, ~] = calculate_switching_zvs(source.Vin, I_sw_ss_l, f_sw_curr, Lk_opt * (trans.n^2), semi.lv, semi.timing.t_dead_on);
+    [P_sw_l_unit, zvs_l, t_req_l, ~] = calculate_switching_zvs(source.Vout, I_sw_ss_l, f_sw_curr, Lk * (trans.n^2), semi.lv, semi.lv.timing.t_dead);
     
     P_sw_total = 4 * P_sw_h_unit + 4 * P_sw_l_unit;
     
-    % --- 3. Worst Case Reference ---
-    P_sw_wc = 4 * f_sw_curr * 0.5 * (source.Vin * I_rms_h + source.Vin * I_rms_l) * ...
-              (semi.timing.t_dead_on + semi.timing.t_dead_off);
-    t_dead_total = semi.timing.t_dead_on + semi.timing.t_dead_off;
+%     % --- 3. Worst Case Reference ---
+%     P_sw_wc = 4 * f_sw_curr * 0.5 * (source.Vin * I_rms_h + source.Vin * I_rms_l) * ...
+%               (semi.timing.t_dead_on + semi.timing.t_dead_off);
+%     t_dead_total = semi.timing.t_dead_on + semi.timing.t_dead_off;
 
 % Body diode losses (use commutation current, not RMS)
 [P_body, P_body_h, P_body_l] = calculateBodyDiodeLosses( ...
-    I_sw_ss_h, I_sw_ss_l, semi.hv.Vf, semi.lv.Vf, f_sw_curr, semi.hv.timing.t_dead_off,semi.lv.timing.t_dead_off, 0, 0); % @saquib does commutation current == maximum ss current? Also check function calling, set dead_time consts and what is t_trans_??
+    I_sw_ss_h, I_sw_ss_l, semi.hv.Vf, semi.lv.Vf, f_sw_curr, semi.hv.timing.t_dead,semi.lv.timing.t_dead, zvs_h, zvs_l, t_req_h, t_req_l); % @saquib does commutation current == maximum ss current? Also check function calling, set dead_time consts and what is t_trans_??
 
 data_loss_body(i)   = P_body;
 data_loss_body_h(i) = P_body_h;
 data_loss_body_l(i) = P_body_l;
 
    % --- 4.Transformer Losses ---  
-[P_core, P_cu, P_tr, Rm_dyn, B_pk] = calculateTransformerLosses( ... % @saquib check if the function calling is okay
+[P_core, P_cu, P_trans, Rm_dyn, B_pk] = calculateTransformerLosses( ... % @saquib check if the function calling is okay
     f_sw_curr, source.Vin, I_rms_h, I_rms_l, ...
     trLoss.V_core, trLoss.A_core, trLoss.N_pri, ...
     trLoss.Ks, trLoss.alpha, trLoss.beta, ...
@@ -204,43 +196,52 @@ assignin('base','Rm',Rm_dyn); % @saquib Why?
 
 data_loss_core(i) = P_core;        % Core loss
 data_loss_tr_cu(i) = P_cu;         % Copper loss
-data_loss_tr_tot(i) = P_tr;        % Total transformer loss     
-data_Lk(i) = Lk_opt;  % Store leakage inductance
+data_loss_tr_tot(i) = P_trans;        % Total transformer loss     
+data_Lk(i) = Lk;  % Store leakage inductance
 data_Rm(i) = Rm_dyn;  % Store magnetization resistance @saquib why store these?
     % --- Store Results ---
     results.freq(i) = f_sw_curr;
-  results.loss_total(i) = P_cond + P_cab + P_gate + P_sw_total + P_body + P_tr;
+  results.loss_total(i) = P_cond + P_cab + P_gate + P_sw_total + P_body + P_trans;
     results.eff_analytical(i) = 100 * target_power / (target_power + results.loss_total(i));
-    results.eff_worst_case(i) = 100 * target_power / (target_power + P_cond + P_cab + P_gate + P_sw_wc);
+    %results.eff_worst_case(i) = 100 * target_power / (target_power + P_cond + P_cab + P_gate + P_sw_wc);
     results.breakdown(:, i) = [P_cond; P_cab; P_gate; P_sw_total; P_body];
-    results.delay(i) = Delay_Sweep;
+    %results.delay(i) = Delay_Sweep;
     
     % Save Metrics for Plotting
     results.I_rms_h(i) = I_rms_h;
     results.I_rms_l(i) = I_rms_l;
     results.I_sw_ss_h(i) = I_sw_ss_h;
     results.I_sw_ss_l(i) = I_sw_ss_l;
-    results.I_peak_h_global(i) = I_peak_h_global;
-    results.I_peak_l_global(i) = I_peak_l_global;
+    
     
     % Save Physics Metrics
-    results.zvs_margin_h(i) = E_rat_h;
-    results.t_trans_h(i) = t_req_h;
+   
+    results.t_req_h(i) = t_req_h;
+    results.t_req_l(i) = t_req_h;
 
     % --- Calculate Magnetic Size ---
     % Conversion: Phase(rad) = Delay(ratio) * pi or Delay(sec) * 2*pi*f
     % Assuming 'Delay_Sweep' from findDABDelay is in SECONDS:
-    phase_rad = Delay_Sweep * 2 * pi * f_sw_curr;
-    
-    [v_L, v_T, v_tot, ~] = dab_size_calc(f_sw_curr, source.Vin, source.Vin, ...
-                                         target_power, trans.n, phase_rad, I_peak_h_global);  %% @sahib @saquib, this fcn needs to be reworked. We are using a closed loop control, hence no delay param. Also Lk is already calculated, why recalculate it?
-                                     
-    results.Vol_L(i) = v_L * 1e6;     % Convert m^3 to cm^3 for easier reading
-    results.Vol_T(i) = v_T * 1e6;     % Convert m^3 to cm^3
-    results.Vol_Total(i) = v_tot * 1e6;
-    
+%     phase_rad = Delay_Sweep * 2 * pi * f_sw_curr;
+%     
+%     [v_L, v_T, v_tot, ~] = dab_size_calc(f_sw_curr, source.Vin, source.Vin, ...
+%                                          target_power, trans.n, phase_rad, I_peak_h_global); 
+%% @sahib @saquib, this fcn needs to be reworked. We are using a closed loop control, hence no delay param. Also Lk is already calculated, why recalculate it?
+%                                      
+%     results.Vol_L(i) = v_L * 1e6;     % Convert m^3 to cm^3 for easier reading
+%     results.Vol_T(i) = v_T * 1e6;     % Convert m^3 to cm^3
+%     results.Vol_Total(i) = v_tot * 1e6;
+%     
     fprintf(' %.1f kHz | Lk:%.1fuH | I_sw: %.1fA | Eff: %.2f%% | ZVS: H:%d L:%d\n', ...
-        f_sw_curr/1e3, Lk_opt/1e-6, I_sw_ss_l, results.eff_analytical(i), zvs_h, zvs_l);
+        f_sw_curr/1e3, Lk/1e-6, I_sw_ss_l, results.eff_analytical(i), zvs_h, zvs_l);
+    
+    plot(simOut.tout,I_raw_out);
+    title("%f kHz", f_sw_curr*1e-3);
+    
+     exportgraphics(gcf, "current_plots.pdf", ...
+        'Append', true, ...
+        'ContentType','image');
+    close 
 end
 
 
@@ -260,15 +261,14 @@ delay_us = results.delay(valid)*1e6;  delay_us = delay_us(idxS);
 
 I_rms_h = results.I_rms_h(valid); I_rms_h = I_rms_h(idxS);
 I_rms_l = results.I_rms_l(valid); I_rms_l = I_rms_l(idxS);
-I_pk_h  = results.I_peak_h_global(valid); I_pk_h = I_pk_h(idxS);
-I_pk_l  = results.I_peak_l_global(valid); I_pk_l = I_pk_l(idxS);
 
-zvsM = results.zvs_margin_h(valid); zvsM = zvsM(idxS);
-tReq = results.t_trans_h(valid)*1e9; tReq = tReq(idxS); % ns
 
-VolL = results.Vol_L(valid); VolL = VolL(idxS);
-VolT = results.Vol_T(valid); VolT = VolT(idxS);
-VolTot = results.Vol_Total(valid); VolTot = VolTot(idxS);
+
+tReq = results.t_req_h(valid)*1e9; tReq = tReq(idxS); % ns
+
+% VolL = results.Vol_L(valid); VolL = VolL(idxS);
+% VolT = results.Vol_T(valid); VolT = VolT(idxS);
+% VolTot = results.Vol_Total(valid); VolTot = VolTot(idxS);
 
 Pcore = data_loss_core(valid);   Pcore = Pcore(idxS);
 Pcu   = data_loss_tr_cu(valid);  Pcu   = Pcu(idxS);
