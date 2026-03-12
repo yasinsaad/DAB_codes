@@ -6,9 +6,9 @@ clear; clc; close all;
 model_name = 'DAB_freq_sweep_sim'; 
 target_power = 25000;              % 25 kW Nominal
 headroom_factor = 1.3;             % Design for 30 kW Peak
-freq_steps = (10:10:120) * 1e3;    % Frequency Sweep (10kHz to 180kHz)
+freq_steps = (70:10:100) * 1e3;    % Frequency Sweep (10kHz to 180kHz)
 num_sweep = length(freq_steps);
-sim_time = 0.05;
+sim_time = 0.16;
 max_power = headroom_factor*target_power;
 %% --- 2. PARAMETERS ---
 
@@ -110,8 +110,8 @@ for i = 1:num_sweep
     f_sw_curr = freq_steps(i);
     T = 1 / f_sw_curr;
     
-    %% A. Dynamic Lk Calculation
-  Lk = (source.Vin * source.Vout) / (8 * trans.n * f_sw_curr * max_power); 
+    %% A. Inductor Parameters Calculation
+  inductor = get_inductor_params(source, trans, f_sw_curr, max_power); 
      
     %% B. Control Calculation
     % not needed for closed loop
@@ -163,12 +163,13 @@ for i = 1:num_sweep
     P_cab  = 2*(I_rms_in^2 * passives.hv.R_cab) + 2*(I_rms_out^2 * passives.lv.R_cab);
     P_gate = (4 * semi.hv.Qg * semi.hv.V_dr_on * f_sw_curr) + ...
              (4 * semi.lv.Qg * semi.lv.V_dr_on * f_sw_curr);
+    P_ind_dc = I_rms_in^2 * inductor.Rdc;
     
     % --- 2. Switching Losses (Analytical w/ ZVS & Time Check) ---
     % HV Side
-    [P_sw_h_unit, zvs_h, t_req_h, E_rat_h] = calculate_switching_zvs(source.Vin, I_sw_ss_h, f_sw_curr, Lk, semi.hv, semi.hv.timing.t_dead);
+    [P_sw_h_unit, zvs_h, t_req_h, E_rat_h] = calculate_switching_zvs(source.Vin, I_sw_ss_h, f_sw_curr, inductor.Lk, semi.hv, semi.hv.timing.t_dead);
     % LV Side (Reflect Lk by MULTIPLYING n^2)
-    [P_sw_l_unit, zvs_l, t_req_l, ~] = calculate_switching_zvs(source.Vout, I_sw_ss_l, f_sw_curr, Lk * (trans.n^2), semi.lv, semi.lv.timing.t_dead);
+    [P_sw_l_unit, zvs_l, t_req_l, ~] = calculate_switching_zvs(source.Vout, I_sw_ss_l, f_sw_curr, inductor.Lk * (trans.n^2), semi.lv, semi.lv.timing.t_dead);
     
     P_sw_total = 4 * P_sw_h_unit + 4 * P_sw_l_unit;
     
@@ -190,21 +191,20 @@ data_loss_body_l(i) = P_body_l;
     f_sw_curr, source.Vin, I_rms_h, I_rms_l, ...
     trLoss.V_core, trLoss.A_core, trLoss.N_pri, ...
     trLoss.Ks, trLoss.alpha, trLoss.beta, ...
-    trLoss.Rac_pri, trLoss.Rac_sec, true);
+   trLoss.Rac_pri, trLoss.Rac_sec, true);
 
-assignin('base','Rm',Rm_dyn); % @saquib Why?
 
 data_loss_core(i) = P_core;        % Core loss
 data_loss_tr_cu(i) = P_cu;         % Copper loss
 data_loss_tr_tot(i) = P_trans;        % Total transformer loss     
-data_Lk(i) = Lk;  % Store leakage inductance
+data_Lk(i) = inductor.Lk;  % Store leakage inductance
 data_Rm(i) = Rm_dyn;  % Store magnetization resistance @saquib why store these?
     % --- Store Results ---
     results.freq(i) = f_sw_curr;
-  results.loss_total(i) = P_cond + P_cab + P_gate + P_sw_total + P_body + P_trans;
+  results.loss_total(i) = P_cond + P_cab + P_gate + P_sw_total + P_body + P_trans +P_ind_dc;
     results.eff_analytical(i) = 100 * target_power / (target_power + results.loss_total(i));
     %results.eff_worst_case(i) = 100 * target_power / (target_power + P_cond + P_cab + P_gate + P_sw_wc);
-    results.breakdown(:, i) = [P_cond; P_cab; P_gate; P_sw_total; P_body];
+    results.breakdown(:, i) = [P_cond; P_cab; P_gate; P_sw_total; P_body; P_ind_dc];
     %results.delay(i) = Delay_Sweep;
     
     % Save Metrics for Plotting
@@ -217,7 +217,7 @@ data_Rm(i) = Rm_dyn;  % Store magnetization resistance @saquib why store these?
     % Save Physics Metrics
    
     results.t_req_h(i) = t_req_h;
-    results.t_req_l(i) = t_req_h;
+    results.t_req_l(i) = t_req_l;
 
     % --- Calculate Magnetic Size ---
     % Conversion: Phase(rad) = Delay(ratio) * pi or Delay(sec) * 2*pi*f
@@ -233,7 +233,7 @@ data_Rm(i) = Rm_dyn;  % Store magnetization resistance @saquib why store these?
 %     results.Vol_Total(i) = v_tot * 1e6;
 %     
     fprintf(' %.1f kHz | Lk:%.1fuH | I_sw: %.1fA | Eff: %.2f%% | ZVS: H:%d L:%d\n', ...
-        f_sw_curr/1e3, Lk/1e-6, I_sw_ss_l, results.eff_analytical(i), zvs_h, zvs_l);
+        f_sw_curr/1e3, inductor.Lk/1e-6, I_sw_ss_l, results.eff_analytical(i), zvs_h, zvs_l);
     
     plot(simOut.tout,I_raw_out);
     title("%f kHz", f_sw_curr*1e-3);
