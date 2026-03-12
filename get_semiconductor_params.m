@@ -1,119 +1,137 @@
 function [hv_params, lv_params] = get_semiconductor_params(type_hv, type_lv)
-% GET_SEMICONDUCTOR_PARAMS Returns parameter structs for DAB semiconductors.
+% GET_SEMICONDUCTOR_PARAMS
+% Returns parameter structs for DAB semiconductors.
 %
 % Usage:
-%   [semi.hv, semi.lv] = get_semiconductor_params('SiC_1200V', 'Si_100V');
-%
+%   [semi.hv, semi.lv] = get_semiconductor_params('SiC_1200V', 'Si_60V');
 
-
-    % Load HV Side
     hv_params = load_device_profile(type_hv);
-    
-    % Load LV Side
     lv_params = load_device_profile(type_lv);
-
 end
 
 function p = load_device_profile(type)
+
     switch type
-        case {'SiC', 'SiC_1200V'}
-            p.Ron       = 80e-3;          % Table 4, typical 30–38 mΩ
-            p.Rd        = 2;           % External gate resistor (2 Ω recommended)
-            p.Vf        = 3.9;           % Table 6, forward voltage at 27 A, 25°C
-            p.Qg        = 64e-9;          % Table 4, total gate charge
-            p.Rg        = 2.6;            % Table 4, internal gate resistance
-            p.Ciss      = 1031e-12;       % Table 4
-            p.Crss      = 6e-12;        % Table 4
-            p.Coss      = 92e-12;         % Table 4
 
-% Drive logic
-            p.V_dr_on   = 20;             % Table 3, recommended turn-on voltage
-            p.V_dr_off  = -5;             % Typical negative turn-off voltage for SiC
-            p.V_gs_th   = 4.4;            % Table 4, typical threshold voltage
-            p.V_plateau = 6.0;            % Estimated Miller plateau voltage
+       case {'SiC', 'SiC_1200V'}
+            % Infineon AIMBG120R030M1 CoolSiC 1200 V MOSFET
 
-% Body diode reverse recovery
-            p.diode.trr_ref  = 28e-9;     % Typical reverse recovery time for SiC MOSFET
-            p.diode.Irm_ref  = 13.5;      % Table 6, forward recovery peak current
-            p.diode.Io_ref   = 27;        % Table 6 test current
-            p.diode.didt_ref = 2000e6;    % Table 6, di/dt test condition (2000 A/μs)
-        
+            % Conduction
+            p.Ron = 30e-3;          % ohm, Table 4 max/typ range around 30-38 mOhm
+            p.Vf  = 3.95;           % V, Table 6 typ at 27 A, 25 C and 800V
+
+            % Gate network
+            p.Rd = 2.0;             % ohm, chosen external gate resistor in the table
+            p.Rg = 2.6;             % ohm, Table 4 internal gate resistance
+
+            % Charges all given at 800V
+            p.Qg  = 57e-9;          % C, Table 4 total gate charge
+            p.Qgs = 15e-9;          % C, plateau gate charge
+            p.Qgd = 10e-9;          % C, gate-drain charge
+
+            % Capacitances at 800V
+            p.Ciss = 1738e-12;      % F
+            p.Crss = 4.4e-12;       % F
+            p.Coss = 82e-12;        % F
+            p.Eoss = 34e-6;         % J at 800 V, if you want to use Eoss-based ZVS later
+
+            % Drive logic
+            p.V_dr_on   = 20;       % V
+            p.V_dr_off  = 0;       % V, recommended in datasheet 
+            p.V_gs_th   = 4.4;      % V, typical threshold
+            p.V_plateau = 8;      % V, took from the graph of Vgs and Qg
+
+            % Body diode / reverse conduction
+            p.diode.trr_ref  = 26e-9;      % Not given , estimated from 2* Qfr/Ifrm
+            p.diode.Irm_ref  = 13.5;       % A, Table 6 forward recovery peak current
+            p.diode.Io_ref   = 27;         % A, Table 6 test current
+            p.diode.didt_ref = 2000e6;     % A/s = 2000 A/us
+
+            % Flags
+            p.isMOSFET = true;
+            p.isGaN    = false;
+
         case {'Si', 'Si_LV', 'Si_60V'}
-          % Vishay SQJQ160E 60 V N-Channel MOSFET Parameters
-p.Ron       = 0.85e-3;        % Page 2, max RDS(on) at 20 A, 10 V, 25°C
-p.Rd        = 1.0;            % Page 2, external gate resistor used in switching test
-p.Vf        = 0.7;            % Page 2, max body diode forward voltage
-p.Qg        = 183e-9;         % Page 2, max total gate charge at 30 V, 50 A
-p.Rg        = 2.1;            % Page 2, max internal gate resistance
-p.Ciss      = 16070e-12;      % Page 2, max input capacitance
-p.Crss      = 458e-12;        % Page 2, max reverse transfer capacitance
-p.Coss      = 6681e-12;       % Page 2, max output capacitance
+            % Vishay SQJQ160E 60 V N-channel MOSFET
 
-% Drive logic
-p.V_dr_on   = 10;             % Page 2, recommended turn-on voltage for RDS(on) spec
-p.V_dr_off  = -5;             % Suggested negative turn-off for better noise immunity
-p.V_gs_th   = 3.5;            % Page 2, max threshold voltage
-p.V_plateau = 4.5;            % Estimated Miller plateau voltage (typical for trench MOSFET)
+            % Conduction
+            p.Ron = 0.55e-3;        % ohm, typical RDS(on) at 10 V
+            p.Vf  = 0.7;            % V, typical body diode forward voltage
 
-% Body diode reverse recovery
-p.diode.trr_ref  = 176e-9;    % Page 2, max reverse recovery time
-p.diode.Irm_ref  = 2.7;       % Page 2, typical peak reverse recovery current
-p.diode.Io_ref   = 15;        % Page 2, test current for trr
-p.diode.didt_ref = 100e6;     % Page 2, di/dt test condition (100 A/μs)
+            % Gate network
+            p.Rd = 1.0;             % ohm, external gate resistor used in test
+            p.Rg = 1.4;             % ohm, max internal gate resistance given in table
+
+            % Charges
+            p.Qg  = 183e-9;         % C, typical total gate charge
+            p.Qgs = 53e-9;          % C, typical gate-source charge
+            p.Qgd = 42e-9;          % C, typical gate-drain charge
+
+            % Capacitances taken from the graph at 48V
+            p.Ciss = 12000e-12;     % F, 
+            p.Crss = 70e-12;       % F,
+            p.Coss = 2200e-12;      % F, 
+  	    p.Eoss = 4.218e-6;
+            % Drive logic
+            p.V_dr_on   = 10;       % V
+            p.V_dr_off  = -5;       % V, design choice
+            p.V_gs_th   = 3;      % V, max threshold
+            p.V_plateau = 5;      % V, engineering estimate
+
+            % Body diode
+            p.diode.trr_ref  = 88e-9;     % s, max reverse recovery time
+            p.diode.Irm_ref  = 2.7;        % A, typical
+            p.diode.Io_ref   = 15;         % A, test current
+            p.diode.didt_ref = 100e6;      % A/s = 100 A/us
+
+            % Flags
+            p.isMOSFET = true;
+            p.isGaN    = false;
 
         case {'GaN', 'GaN_100V'}
-           % EPC2218 100 V eGaN FET Parameters
-p.Ron       = 3.2e-3;         % Page 1, max RDS(on) at 25 A, 5 V, 25°C
-p.Rd        = 2.0;            % Suggested external gate resistor (adjust for ringing)
-p.Vf        = 1.5;            % Page 1, typical body diode forward voltage at 0.5 A
-p.Qg        = 13.6e-9;        % Page 2, max total gate charge at 50 V, 5 V, 25 A
-p.Rg        = 0.8;            % Page 2, typical internal gate resistance
-p.Ciss      = 1570e-12;       % Page 2, max input capacitance
-p.Crss      = 4.3e-12;        % Page 2, typical reverse transfer capacitance
-p.Coss      = 843e-12;        % Page 2, max output capacitance
+            % 100 V eGaN FET 6 in parallel so Id is 87A
+            % Update these values if you are specifically using EPC2218 or EPC2367.
 
-% Drive logic
-p.V_dr_on   = 5;              % Page 1, recommended turn-on voltage for RDS(on)
-p.V_dr_off  = -4;             % Suggested negative turn-off for eGaN (improves noise immunity)
-p.V_gs_th   = 2.5;            % Page 1, max gate threshold voltage
-p.V_plateau = 2.5;            % Estimated Miller plateau voltage
+            % Conduction
+            p.Ron = 2.33e-4;         % ohm verified from rds v vgs graph for 60A and scaled to80A (1.4e-3)/6 
+            p.Vf  = 1.4;            % V, reverse conduction drop estimate
 
-% Body diode (zero reverse recovery)
-p.diode.trr_ref  = 0;         % Page 2, Qrr = 0 (no reverse recovery)
-p.diode.Irm_ref  = 0;         % No reverse recovery peak
-p.diode.Io_ref   = 0.5;       % Page 1, test current for Vf
-p.diode.didt_ref = 0;         % Not applicable
+            % Gate network
+            p.Rd = 2.0;             % ohm, chosen external gate resistor
+            p.Rg = 0.6;             % ohm, internal gate resistance
 
-        case {'IGBT', 'IGBT_1200V'}
-            
-           % STGW15S120DF3 1200 V IGBT Parameters
-p.Vce_sat   = 1.55;           % Table 4, max VCE(sat) at 15 A, 15 V, 25°C
-p.Vge_th    = 6.0;            % Table 4, max gate threshold voltage
-p.Qg        = 53e-9;          % Table 5, typical total gate charge
-p.Qgc       = 28.2e-9;        % Table 5, typical gate-collector charge
-p.Qge       = 7.8e-9;         % Table 5, typical gate-emitter charge
-p.Cies      = 981e-12;         % Table 5, typical input capacitance
-p.Cres      = 37e-12;         % Table 5, typical reverse transfer capacitance
-p.Coes      = 82e-12;         % Table 5, typical output capacitance
+            % Charges(typical at 50V)
+            p.Qg  = 1.02e-7;          % C 17e-9*6
+            p.Qgs = 3.18e-8;         % C  5.3e-9*6
+            p.Qgd = 1.44e-8;         % C  2.4e-9*6
+            p.Qoss = 3e-7;         % C from Qoss and Vds graph  50e-9*6
+            p.Qrr  = 0;             % C
 
-% IGBT gate drive
-p.V_dr_on   = 15;             % Table 4, recommended turn-on voltage
-p.V_dr_off  = -5;             % Suggested negative turn-off for noise immunity
-p.Rg        = 3.0;            % Estimated internal gate resistance
-p.Rd        = 10;             % Typical external gate resistor for IGBT
+            % Capacitances (typical) taken at 50V close to our 48V verified from C v Vds graph
+            p.Ciss = 1.302e-8;      % F 2170e-12*6
+            p.Crss = 4.8e-11;         % F8e-12*6
+            p.Coss = 3.54e-9;       % F  590e-12*6
 
-% Body diode (antiparallel diode)
-p.Vf        = 3.8;            % Table 4, max forward voltage at 15 A, 25°C
-p.diode.trr_ref  = 270e-9;    % Estimated reverse recovery time (soft recovery)
-p.diode.Irm_ref  = 15;        % Estimated peak reverse recovery current
-p.diode.Io_ref   = 15;        % Table 4 test current
-p.diode.didt_ref = 935e6;     % Estimated di/dt (A/s)
+            % Drive logic
+            p.V_dr_on   = 5;        % V
+            p.V_dr_off  = 0;        % V
+            p.V_gs_th   = 1.1;      % V, typical value from table
+            p.V_plateau = 2.5;      % V, from vgs vs qg graph
+            % Reverse conduction placeholder
+%GaN FETs do NOT have a body diode with reverse recovery.They conduct reverse current through the channel, so:Qrr ≈ 0,trr ≈ 0,Irm ≈ 0
 
-% Switching times (estimated from curves)
-p.t_don     = 23e-9;         % Estimated turn-on delay
-p.t_rise    = 10e-9;         % Estimated rise time
-p.t_doff    = 140e-9;         % Estimated turn-off delay
-p.t_fall    = 282e-9;         % Estimated fall time
+            p.diode.trr_ref  = 0;
+            p.diode.Irm_ref  = 0;
+            p.diode.Io_ref   = 1;
+            p.diode.didt_ref = 1;
+
+            % Limits
+            p.Vds_max = 100;        % V
+            p.Id_max  = 606;        % A 101*6
+
+            % Flags       
+p.isMOSFET = true;
+p.isGaN    = true;
 
         otherwise
             error('Unknown Semiconductor Type: %s', type);
