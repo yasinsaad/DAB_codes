@@ -35,24 +35,29 @@ source.Vin = 800; source.Vout = 48;
 
 % --- Magnetization branch initialization (CRITICAL) ---
 trans.Lm = 1e6;        % H (constant magnetizing inductance)
-trans.Rm = 1e6;          % Ohm (dummy initial value, overwritten later) @saquib, not overwritten later. also provide source
-Tr1=0.004; % @saquib what are these? source?
-Tr2=0.003;
+trans.Rm = 1e6;          % Ohm (dummy initial value, overwritten later) @saquib, not overwritten later. also provide source-
+%very high value of rm and lm taken in simulation block as recommended by bhai, isnt a dummy as rym is not dyamic anymore
+Tr1=0.075; % @saquib what are these? source? 
+%from krismer dab model i got rac for primary and secondary, tr1 and tr2 are dc winding res for transformer simulation block , which i scaled from rac
+Tr2=6e-6;
 % --- Core parameters (you already have these) --- 
 % these may be redundant. Also source needed
 % @saquib
-trLoss.V_core = 1.2e-4;
-trLoss.A_core = 8e-4;
+%these are needed for my transformer loss calculations,source E 140/68/40 Core
+trLoss.V_core = 5.00045e-3; %in m3
+trLoss.A_core = 1.585e-3;   %in m2
 trLoss.N_pri  = 16;
 
 % --- Material point (you already have these) --- @saquib source ??!
-trLoss.Ks    = 200000;  
-trLoss.alpha = 1.6;
-trLoss.beta  = 2.2;
-
+%source is SIFERRIT material N97 i have calculated all these from the graphs 
+trLoss.Ks    = 1.96e4;  
+trLoss.alpha = 1.15;
+trLoss.beta  = 2.32;
+trLoss.C_wave = 1.25;
 % --- Winding AC resistances (YOU MUST SET THESE properly) --- @saquib source ??!
-trLoss.Rac_pri = 4e-3;
-trLoss.Rac_sec = 0.3e-3;
+%source krismer page 311
+trLoss.Rac_pri =  149e-3;
+trLoss.Rac_sec = 1e-5;
 
 % --- Initialize Data Arrays ---
 results.freq = zeros(1, num_sweep);
@@ -175,20 +180,24 @@ for i = 1:num_sweep
 %     t_dead_total = semi.timing.t_dead_on + semi.timing.t_dead_off;
 
 % Body diode losses (use commutation current, not RMS)
-[P_body, P_body_h, P_body_l] = calculateBodyDiodeLosses( ...
-    I_sw_ss_h, I_sw_ss_l, semi.hv.Vf, semi.lv.Vf, f_sw_curr, semi.hv.timing.t_dead,semi.lv.timing.t_dead, zvs_h, zvs_l, t_req_h, t_req_l); % @saquib does commutation current == maximum ss current? Also check function calling, set dead_time consts and what is t_trans_??
-
+[P_body, P_body_h, P_body_l, info] = calculateBodyDiodeLosses( ...
+    I_comm_h, I_comm_l, V_f_h, V_f_l, f_sw, ...
+    t_dead_actual_h, t_dead_actual_l, ...
+    is_zvs_h, is_zvs_l, ...
+    t_trans_needed_h, t_trans_needed_l) % @saquib does commutation current == maximum ss current? Also check function calling, set dead_time consts and what is t_trans_??
+   % Commutation current is not the maximum steady-state current.I_comm_h and I_comm_l should be the instantaneous bridge/leg current at the exact commutation moment,
+%t_trans_needed_h and t_trans_needed_l are the commutation-transition times needed for the switch node to actually move from one rail to the other during dead time
 data_loss_body(i)   = P_body;
 data_loss_body_h(i) = P_body_h;
 data_loss_body_l(i) = P_body_l;
 
    % --- 4.Transformer Losses ---  
-[P_core, P_cu, P_trans, Rm_dyn, B_pk] = calculateTransformerLosses( ... % @saquib check if the function calling is okay
-    f_sw_curr, source.Vin, I_rms_h, I_rms_l, ...
-    trLoss.V_core, trLoss.A_core, trLoss.N_pri, ...
-    trLoss.Ks, trLoss.alpha, trLoss.beta, ...
-   trLoss.Rac_pri, trLoss.Rac_sec, true);
-
+[P_core, P_cu, P_tr, B_pk, k_fe] = calculateTransformerLosses( ...
+    f_sw, Vin, Ipri_rms, Isec_rms, ...
+    V_core_fixed, A_core_fixed, N_pri, ...
+    Ks_ref, alpha, beta, ...
+    Rac_pri, Rac_sec, C_wave)
+%fixed calling
 
 results.coreLoss(i) = P_core;        % Core loss
 results.copperLoss(i) = P_cu;         % Copper loss
