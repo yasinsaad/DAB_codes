@@ -13,7 +13,6 @@ max_power = headroom_factor*target_power;
 %% --- 2. PARAMETERS ---
 
 
-
 % B. Load Semiconductor Profiles (Embedded Local Function)
 [semi.hv, semi.lv] = get_semiconductor_params('SiC_1200V', 'Si_60V');
 
@@ -23,7 +22,7 @@ semi.lv.timing.t_dead= 90e-9;
 
 
 % C. Passives
-passives.Rs = 1e6; 
+passives.Rs = 1e6; %snubber resistance
 passives.hv.R_cab = 5e-3;   passives.hv.L_cab = 2e-6;   passives.hv.C_bulk = 470e-6;
 passives.lv.R_cab = 0.1e-3; passives.lv.L_cab = 100e-9; passives.lv.C_bulk = 4e-3;
 
@@ -61,12 +60,12 @@ results.eff_analytical = zeros(1, num_sweep);
 results.eff_worst_case = zeros(1, num_sweep);
 results.loss_total = zeros(1, num_sweep);
 results.breakdown = zeros(6, num_sweep);
-results.delay = zeros(1, num_sweep);
-data_loss_core   = zeros(1, num_sweep);
-data_loss_tr_cu  = zeros(1, num_sweep);
-data_loss_tr_tot = zeros(1, num_sweep);
-data_Lk = zeros(1, num_sweep);
-data_Rm = zeros(1, num_sweep);
+
+results.coreLoss   = zeros(1, num_sweep);
+results.copperLoss  = zeros(1, num_sweep);
+results.totalTransformerLoss = zeros(1, num_sweep);
+results.Lk = zeros(1, num_sweep);
+
 
 % Current Metrics
 results.I_rms_h = zeros(1, num_sweep);
@@ -92,14 +91,11 @@ assignin('base', 'R_d_h',  semi.hv.Rd);   assignin('base', 'R_d_l',  semi.lv.Rd)
 assignin('base', 'V_f_h',  semi.hv.Vf);   assignin('base', 'V_f_l',  semi.lv.Vf);
 assignin('base', 'Q_g_h',  semi.hv.Qg);   assignin('base', 'Q_g_l',  semi.lv.Qg);
 assignin('base', 'V_gs_h', semi.hv.V_dr_on); assignin('base', 'V_gs_l', semi.lv.V_dr_on);
-
 assignin('base', 'R_cab_h', passives.hv.R_cab); assignin('base', 'L_cab_h', passives.hv.L_cab);
 assignin('base', 'C_bulk_h',passives.hv.C_bulk);
 assignin('base', 'R_cab_l', passives.lv.R_cab); assignin('base', 'L_cab_l', passives.lv.L_cab);
 assignin('base', 'C_bulk_l',passives.lv.C_bulk);
 assignin('base', 'R_s',     passives.Rs);
-
-assignin('base', 'Vin', source.Vin); assignin('base', 'Vout', source.Vout);
 assignin('base', 'n', trans.n); 
 
 
@@ -194,18 +190,16 @@ data_loss_body_l(i) = P_body_l;
    trLoss.Rac_pri, trLoss.Rac_sec, true);
 
 
-data_loss_core(i) = P_core;        % Core loss
-data_loss_tr_cu(i) = P_cu;         % Copper loss
-data_loss_tr_tot(i) = P_trans;        % Total transformer loss     
-data_Lk(i) = inductor.Lk;  % Store leakage inductance
-data_Rm(i) = Rm_dyn;  % Store magnetization resistance @saquib why store these?
+results.coreLoss(i) = P_core;        % Core loss
+results.copperLoss(i) = P_cu;         % Copper loss
+results.totalTransformerLoss(i) = P_trans;        % Total transformer loss     
+results.Lk(i) = inductor.Lk;  % Store leakage inductance
     % --- Store Results ---
     results.freq(i) = f_sw_curr;
   results.loss_total(i) = P_cond + P_cab + P_gate + P_sw_total + P_body + P_trans +P_ind_dc;
     results.eff_analytical(i) = 100 * target_power / (target_power + results.loss_total(i));
     %results.eff_worst_case(i) = 100 * target_power / (target_power + P_cond + P_cab + P_gate + P_sw_wc);
     results.breakdown(:, i) = [P_cond; P_cab; P_gate; P_sw_total; P_body; P_ind_dc];
-    %results.delay(i) = Delay_Sweep;
     
     % Save Metrics for Plotting
     results.I_rms_h(i) = I_rms_h;
@@ -236,144 +230,49 @@ data_Rm(i) = Rm_dyn;  % Store magnetization resistance @saquib why store these?
         f_sw_curr/1e3, inductor.Lk/1e-6, I_sw_ss_l, results.eff_analytical(i), zvs_h, zvs_l);
     
     plot(simOut.tout,I_raw_out);
-    title("%f kHz", f_sw_curr*1e-3);
+    title("%.f kHz", f_sw_curr*1e-3);
     
      exportgraphics(gcf, "current_plots.pdf", ...
         'Append', true, ...
         'ContentType','image');
-    close 
+    close
 end
 
 
-%% --- 4. EXTENDED PLOTTING SUITE (CLEAN) --- %%% Needs reworking
+%% --- 4. PLOTTING RESULTS ---
+% Convert frequency to kHz for readability
+freq_kHz = results.freq / 1e3;
 
-% --- Clean valid points (in case some sweep points failed) ---
-valid = results.freq > 0 & ~isnan(results.eff_analytical);
-f_kHz = results.freq(valid)/1e3;
-
-% Sort by frequency
-[ f_kHz, idxS ] = sort(f_kHz);
-
-effA = results.eff_analytical(valid); effA = effA(idxS);
-effW = results.eff_worst_case(valid); effW = effW(idxS);
-lossTot = results.loss_total(valid);  lossTot = lossTot(idxS);
-delay_us = results.delay(valid)*1e6;  delay_us = delay_us(idxS);
-
-I_rms_h = results.I_rms_h(valid); I_rms_h = I_rms_h(idxS);
-I_rms_l = results.I_rms_l(valid); I_rms_l = I_rms_l(idxS);
-
-
-
-tReq = results.t_req_h(valid)*1e9; tReq = tReq(idxS); % ns
-
-% VolL = results.Vol_L(valid); VolL = VolL(idxS);
-% VolT = results.Vol_T(valid); VolT = VolT(idxS);
-% VolTot = results.Vol_Total(valid); VolTot = VolTot(idxS);
-
-Pcore = data_loss_core(valid);   Pcore = Pcore(idxS);
-Pcu   = data_loss_tr_cu(valid);  Pcu   = Pcu(idxS);
-Ptr   = data_loss_tr_tot(valid); Ptr   = Ptr(idxS);
-
-% Breakdown matrix assumed: [Cond; Cab; Gate; Switching; Body]
-BD = results.breakdown(:,valid); 
-BD = BD(:,idxS);
-
-%% === FIGURE 1: OVERVIEW (4-panels) ===
-figure('Color','w', 'Name', 'DAB Overview', 'Position', [50 50 1100 650]);
-tiledlayout(2,2,'Padding','compact','TileSpacing','compact');
-
-nexttile;
-plot(f_kHz, effA, 'o-','LineWidth',2,'MarkerSize',6); hold on;
-plot(f_kHz, effW, '--','LineWidth',1.5);
-grid on; xlabel('Frequency (kHz)'); ylabel('Efficiency (%)');
-legend('ZVS-aware','Worst-case','Location','best');
+% Plot 1: Efficiency vs Frequency
+figure('Name', 'Efficiency vs Frequency', 'Color', 'w');
+plot(freq_kHz, results.eff_analytical, '-o', 'LineWidth', 2);
+xlabel('Frequency (kHz)');
+ylabel('Efficiency (%)');
 title('Efficiency vs Frequency');
+grid on;
 
-nexttile;
-plot(f_kHz, lossTot, 'o-','LineWidth',2,'MarkerSize',6);
-grid on; xlabel('Frequency (kHz)'); ylabel('Total Loss (W)');
-title('Total Loss vs Frequency');
+% Plot 2: Total Loss vs Frequency
+figure('Name', 'Total Loss vs Frequency', 'Color', 'w');
+plot(freq_kHz, results.loss_total, '-o', 'LineWidth', 2, 'Color', '#D95319');
+xlabel('Frequency (kHz)');
+ylabel('Total Loss (W)');
+title('Total System Loss vs Frequency');
+grid on;
 
-nexttile;
-% Stacked bar: add transformer explicitly
-LossMat = [BD(1,:)' BD(2,:)' BD(3,:)' BD(4,:)' BD(5,:)' Ptr(:)];
-bar(f_kHz, LossMat, 'stacked'); grid on;
-xlabel('Frequency (kHz)'); ylabel('Loss (W)');
-legend('MOSFET Cond','Cables','Gate','Switching','Body diode','Transformer','Location','best');
-title('Loss Breakdown (Absolute)');
+% Plot 3: Individual Losses vs Frequency
+figure('Name', 'Loss Breakdown vs Frequency', 'Color', 'w');
+hold on;
+plot(freq_kHz, results.breakdown(1, :), '-x', 'LineWidth', 1.5, 'DisplayName', 'Conduction Loss');
+plot(freq_kHz, results.breakdown(2, :), '-x', 'LineWidth', 1.5, 'DisplayName', 'Cable Loss');
+plot(freq_kHz, results.breakdown(3, :), '-x', 'LineWidth', 1.5, 'DisplayName', 'Gate Drive Loss');
+plot(freq_kHz, results.breakdown(4, :), '-x', 'LineWidth', 1.5, 'DisplayName', 'Switching Loss');
+plot(freq_kHz, results.breakdown(5, :), '-x', 'LineWidth', 1.5, 'DisplayName', 'Body Diode Loss');
+plot(freq_kHz, results.breakdown(6, :), '-x', 'LineWidth', 1.5, 'DisplayName', 'Inductor DC Loss');
+plot(freq_kHz, results.totalTransformerLoss, '-x', 'LineWidth', 1.5, 'DisplayName', 'Transformer Loss');
+hold off;
 
-nexttile;
-plot(f_kHz, delay_us, 's-','LineWidth',2,'MarkerSize',6); hold on;
-plot(f_kHz, (1./(f_kHz*1e3)/4)*1e6, '--','LineWidth',1.3);
-grid on; xlabel('Frequency (kHz)'); ylabel('Delay (\mus)');
-legend('Required delay','T/4 reference','Location','best');
-title('Control Effort');
-
-%% === FIGURE 2: CURRENT STRESS ===
-figure('Color','w', 'Name', 'Current Stress', 'Position', [100 100 950 420]);
-tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
-
-nexttile;
-yyaxis left; plot(f_kHz, I_rms_h, 'o-','LineWidth',2,'MarkerSize',6);
-ylabel('I_{RMS} (A)');
-yyaxis right; plot(f_kHz, I_pk_h, '^-','LineWidth',1.7,'MarkerSize',6);
-ylabel('I_{Peak} (A)');
-grid on; xlabel('Frequency (kHz)'); title('HV Side');
-
-nexttile;
-yyaxis left; plot(f_kHz, I_rms_l, 'o-','LineWidth',2,'MarkerSize',6);
-ylabel('I_{RMS} (A)');
-yyaxis right; plot(f_kHz, I_pk_l, '^-','LineWidth',1.7,'MarkerSize',6);
-ylabel('I_{Peak} (A)');
-grid on; xlabel('Frequency (kHz)'); title('LV Side');
-
-%% === FIGURE 3: ZVS PHYSICS ===
-figure('Color','w', 'Name', 'ZVS Physics', 'Position', [150 150 950 420]);
-tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
-
-nexttile;
-semilogy(f_kHz, zvsM, 'o-','LineWidth',2,'MarkerSize',6); hold on;
-yline(1,'--','LineWidth',1.5);
-grid on; xlabel('Frequency (kHz)'); ylabel('E_{avail}/E_{req}');
-title('ZVS Energy Margin (HV)');
-
-nexttile;
-plot(f_kHz, tReq, 's-','LineWidth',2,'MarkerSize',6); hold on;
-yline(semi.timing.t_dead_on*1e9,'--','LineWidth',1.5);
-grid on; xlabel('Frequency (kHz)'); ylabel('t_{req} (ns)');
-title('Dead-time Utilization (HV)');
-
-%% === FIGURE 4: MAGNETIC SIZE + PARETO ===
-figure('Color','w', 'Name', 'Magnetics Size & Pareto', 'Position', [200 200 1050 420]);
-tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
-
-nexttile;
-plot(f_kHz, VolL, 'o-','LineWidth',1.7,'MarkerSize',6); hold on;
-plot(f_kHz, VolT, 's-','LineWidth',1.7,'MarkerSize',6);
-plot(f_kHz, VolTot,'-','LineWidth',2.2);
-grid on; xlabel('Frequency (kHz)'); ylabel('Volume (cm^3)');
-legend('Inductor','Transformer','Total','Location','best');
-title('Magnetic Component Volume');
-
-nexttile;
-scatter(VolTot, effA, 55, f_kHz, 'filled');
-grid on; xlabel('Total Magnetic Volume (cm^3)'); ylabel('Efficiency (%)');
-title('Pareto: Size vs Efficiency'); cb=colorbar; cb.Label.String='Frequency (kHz)';
-
-%% === FIGURE 5: TRANSFORMER LOSSES (one clean plot) ===
-figure('Color','w', 'Name', 'Transformer Loss', 'Position', [250 250 900 380]);
-plot(f_kHz, Pcore, 'o-','LineWidth',2,'MarkerSize',6); hold on;
-plot(f_kHz, Pcu,   's-','LineWidth',2,'MarkerSize',6);
-plot(f_kHz, Ptr,   'd-','LineWidth',2.3,'MarkerSize',6);
-grid on; xlabel('Frequency (kHz)'); ylabel('Loss (W)');
-legend('Core','Copper','Total','Location','best');
-title('Transformer Loss vs Frequency');
-
-%% === FIGURE 6 (OPTIONAL but very helpful): LOSS BREAKDOWN IN % ===
-figure('Color','w', 'Name', 'Loss Breakdown (%)', 'Position', [300 300 950 420]);
-
-LossMatPct = LossMat ./ sum(LossMat,2) * 100; % per-frequency percentage
-bar(f_kHz, LossMatPct, 'stacked'); grid on;
-xlabel('Frequency (kHz)'); ylabel('Loss Share (%)');
-legend('MOSFET Cond','Cables','Gate','Switching','Body diode','Transformer','Location','best');
-title('Loss Breakdown (Percentage)');
+xlabel('Frequency (kHz)');
+ylabel('Loss (W)');
+title('Individual Loss Components vs Frequency');
+legend('Location', 'best');
+grid on;
