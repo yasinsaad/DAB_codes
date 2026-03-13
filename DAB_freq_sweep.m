@@ -53,7 +53,7 @@ trLoss.N_pri  = 16;
 trLoss.Ks    = 1.96e4;  
 trLoss.alpha = 1.15;
 trLoss.beta  = 2.32;
-
+trLoss.C_wave = 1.25;
 % --- Winding AC resistances (YOU MUST SET THESE properly) --- @saquib source ??!
 %source krismer page 311
 trLoss.Rac_pri =  149e-3;
@@ -188,12 +188,12 @@ data_loss_body_h(i) = P_body_h;
 data_loss_body_l(i) = P_body_l;
 
    % --- 4.Transformer Losses ---  
-[P_core, P_cu, P_trans, Rm_dyn, B_pk] = calculateTransformerLosses( ... % @saquib check if the function calling is okay
-    f_sw_curr, source.Vin, I_rms_h, I_rms_l, ...
-    trLoss.V_core, trLoss.A_core, trLoss.N_pri, ...
-    trLoss.Ks, trLoss.alpha, trLoss.beta, ...
-   trLoss.Rac_pri, trLoss.Rac_sec, true);
-
+[P_core, P_cu, P_tr, B_pk, k_fe] = calculateTransformerLosses( ...
+    f_sw, Vin, Ipri_rms, Isec_rms, ...
+    V_core_fixed, A_core_fixed, N_pri, ...
+    Ks_ref, alpha, beta, ...
+    Rac_pri, Rac_sec, C_wave)
+%fixed calling
 
 results.coreLoss(i) = P_core;        % Core loss
 results.copperLoss(i) = P_cu;         % Copper loss
