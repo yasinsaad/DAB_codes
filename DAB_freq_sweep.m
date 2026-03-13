@@ -4,12 +4,12 @@ clear; clc; close all;
 
 %% --- 1. CONFIGURATION ---
 model_name = 'DAB_freq_sweep_sim'; 
-target_power = 25000;              % 25 kW Nominal
+power.target = 25000;              % 25 kW Nominal
 headroom_factor = 1.3;             % Design for 30 kW Peak
-freq_steps = (70:10:100) * 1e3;    % Frequency Sweep (10kHz to 180kHz)
+freq_steps = (70:10:90) * 1e3;    % Frequency Sweep (10kHz to 180kHz)
 num_sweep = length(freq_steps);
 sim_time = 0.16;
-max_power = headroom_factor*target_power;
+max_power = headroom_factor*power.target;
 %% --- 2. PARAMETERS ---
 
 
@@ -35,27 +35,27 @@ source.Vin = 800; source.Vout = 48;
 trans.Lm = 1e6;        % H (constant magnetizing inductance)
 trans.Rm = 1e6;          % Ohm (dummy initial value, overwritten later) @saquib, not overwritten later. also provide source-
 %very high value of rm and lm taken in simulation block as recommended by bhai, isnt a dummy as rym is not dyamic anymore
-Tr1=0.075; % @saquib what are these? source? 
+trans.R1=0.075; % @saquib what are these? source? 
 %from krismer dab model i got rac for primary and secondary, tr1 and tr2 are dc winding res for transformer simulation block , which i scaled from rac
-Tr2=6e-6;
+trans.R2=6e-6;
 % --- Core parameters (you already have these) --- 
 % these may be redundant. Also source needed
 % @saquib
 %these are needed for my transformer loss calculations,source E 140/68/40 Core
-trLoss.V_core = 5.00045e-3; %in m3
-trLoss.A_core = 1.585e-3;   %in m2
-trLoss.N_pri  = 16;
+trans.V_core = 5.00045e-3; %in m3
+trans.A_core = 1.585e-3;   %in m2
+trans.N_pri  = 16;
 
 % --- Material point (you already have these) --- @saquib source ??!
 %source is SIFERRIT material N97 i have calculated all these from the graphs 
-trLoss.Ks    = 1.96e4;  
-trLoss.alpha = 1.15;
-trLoss.beta  = 2.32;
-trLoss.C_wave = 1.25;
+trans.Ks    = 1.96e4;  
+trans.alpha = 1.15;
+trans.beta  = 2.32;
+trans.C_wave = 1.25;
 % --- Winding AC resistances (YOU MUST SET THESE properly) --- @saquib source ??!
 %source krismer page 311
-trLoss.Rac_pri =  149e-3;
-trLoss.Rac_sec = 1e-5;
+trans.Rac_pri =  149e-3;
+trans.Rac_sec = 1e-5;
 
 % --- Initialize Data Arrays ---
 results.freq = zeros(1, num_sweep);
@@ -99,10 +99,10 @@ assignin('base', 'C_bulk_h',passives.hv.C_bulk);
 assignin('base', 'R_cab_l', passives.lv.R_cab); assignin('base', 'L_cab_l', passives.lv.L_cab);
 assignin('base', 'C_bulk_l',passives.lv.C_bulk);
 assignin('base', 'R_s',     passives.Rs);
-assignin('base', 'n', trans.n); 
 
 
-fprintf('Starting Sweep (Target: %.1f kW)...\n', target_power/1e3);
+
+fprintf('Starting Sweep (Target: %.1f kW)...\n', power.target/1e3);
 
 %% --- 3. MAIN SWEEP LOOP ---
 for i = 1:num_sweep
@@ -115,7 +115,7 @@ for i = 1:num_sweep
     %% B. Control Calculation
     % not needed for closed loop
 %     try
-%         Delay_Sweep = findDABDelay(source.Vin, source.Vin, target_power, trans.n, Lk_opt, f_sw_curr);
+%         Delay_Sweep = findDABDelay(source.Vin, source.Vin, power.target, trans.n, Lk_opt, f_sw_curr);
 %         assignin('base', 'Delay', Delay_Sweep); 
 %         
 %     catch
@@ -158,11 +158,11 @@ for i = 1:num_sweep
     I_peak_l_global = max(abs(I_raw_l));
     
     % --- 1. Conduction & Passive Losses ---
-    P_cond = 4*(I_rms_h^2 * semi.hv.Ron) + 4*(I_rms_l^2 * semi.lv.Ron);
-    P_cab  = 2*(I_rms_in^2 * passives.hv.R_cab) + 2*(I_rms_out^2 * passives.lv.R_cab);
-    P_gate = (4 * semi.hv.Qg * semi.hv.V_dr_on * f_sw_curr) + ...
+    power.loss.conduction = 4*(I_rms_h^2 * semi.hv.Ron) + 4*(I_rms_l^2 * semi.lv.Ron);
+    power.loss.cable  = 2*(I_rms_in^2 * passives.hv.R_cab) + 2*(I_rms_out^2 * passives.lv.R_cab);
+    power.loss.gateDrive = (4 * semi.hv.Qg * semi.hv.V_dr_on * f_sw_curr) + ...
              (4 * semi.lv.Qg * semi.lv.V_dr_on * f_sw_curr);
-    P_ind_dc = I_rms_in^2 * inductor.Rdc;
+    power.loss.inductorDC = I_rms_in^2 * inductor.Rdc;
     
     % --- 2. Switching Losses (Analytical w/ ZVS & Time Check) ---
     % HV Side
@@ -202,11 +202,14 @@ results.copperLoss(i) = P_cu;         % Copper loss
 results.totalTransformerLoss(i) = P_trans;        % Total transformer loss     
 results.Lk(i) = inductor.Lk;  % Store leakage inductance
     % --- Store Results ---
+    power.delivered = source.Vout*I_rms_out;
+    power.supplied = source.Vin*I_rms_in;
     results.freq(i) = f_sw_curr;
-  results.loss_total(i) = P_cond + P_cab + P_gate + P_sw_total + P_body + P_trans +P_ind_dc;
-    results.eff_analytical(i) = 100 * target_power / (target_power + results.loss_total(i));
-    %results.eff_worst_case(i) = 100 * target_power / (target_power + P_cond + P_cab + P_gate + P_sw_wc);
-    results.breakdown(:, i) = [P_cond; P_cab; P_gate; P_sw_total; P_body; P_ind_dc];
+  results.loss_total(i) = power.loss.conduction + power.loss.cable + power.loss.gateDrive + P_sw_total + P_body + P_trans +power.loss.inductorDC;
+    results.eff_analytical(i) = 100 * power.delivered / power.supplied;
+    test = 100*(power.supplied-power.delivered)/results.loss_total(i);
+    
+    results.breakdown(:, i) = [power.loss.conduction; power.loss.cable; power.loss.gateDrive; P_sw_total; P_body; power.loss.inductorDC];
     
     % Save Metrics for Plotting
     results.I_rms_h(i) = I_rms_h;
@@ -226,18 +229,18 @@ results.Lk(i) = inductor.Lk;  % Store leakage inductance
 %     phase_rad = Delay_Sweep * 2 * pi * f_sw_curr;
 %     
 %     [v_L, v_T, v_tot, ~] = dab_size_calc(f_sw_curr, source.Vin, source.Vin, ...
-%                                          target_power, trans.n, phase_rad, I_peak_h_global); 
+%                                          power.target, trans.n, phase_rad, I_peak_h_global); 
 %% @sahib @saquib, this fcn needs to be reworked. We are using a closed loop control, hence no delay param. Also Lk is already calculated, why recalculate it?
 %                                      
 %     results.Vol_L(i) = v_L * 1e6;     % Convert m^3 to cm^3 for easier reading
 %     results.Vol_T(i) = v_T * 1e6;     % Convert m^3 to cm^3
 %     results.Vol_Total(i) = v_tot * 1e6;
 %     
-    fprintf(' %.1f kHz | Lk:%.1fuH | I_sw: %.1fA | Eff: %.2f%% | ZVS: H:%d L:%d\n', ...
-        f_sw_curr/1e3, inductor.Lk/1e-6, I_sw_ss_l, results.eff_analytical(i), zvs_h, zvs_l);
+    fprintf('%.3f| %.1f kHz | Lk:%.1fuH | I_sw: %.1fA | Eff: %.2f%% | ZVS: H:%d L:%d\n', ...
+       test, f_sw_curr/1e3, inductor.Lk/1e-6, I_sw_ss_l, results.eff_analytical(i), zvs_h, zvs_l);
     
     plot(simOut.tout,I_raw_out);
-    title("%.f kHz", f_sw_curr*1e-3);
+    title("%.2f kHz", f_sw_curr*1e-3);
     
      exportgraphics(gcf, "current_plots.pdf", ...
         'Append', true, ...
