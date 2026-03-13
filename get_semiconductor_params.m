@@ -130,10 +130,11 @@ function p = load_device_profile(type)
             p.Id_max  = 606;        % A 101*6
 
             % Flags       
-p.isMOSFET = true;
-p.isGaN    = true;
+p.isMOSFET = true; % @saquib, why?
+p.isGaN    = true;  
 
         otherwise
             error('Unknown Semiconductor Type: %s', type);
     end
+    p.timing.t_dead = estimate_dead_time_from_device(p);
 end

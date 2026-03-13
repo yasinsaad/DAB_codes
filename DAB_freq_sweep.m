@@ -16,9 +16,7 @@ max_power = headroom_factor*target_power;
 % B. Load Semiconductor Profiles (Embedded Local Function)
 [semi.hv, semi.lv] = get_semiconductor_params('SiC_1200V', 'Si_60V');
 
-% A. Semiconductor Global Timing
-semi.hv.timing.t_dead  = 30e-9; % update these @saquib
-semi.lv.timing.t_dead= 90e-9;
+%dead time incorporated in get_semiconductor_params
 
 
 % C. Passives
