@@ -180,9 +180,13 @@ for i = 1:num_sweep
 %     t_dead_total = semi.timing.t_dead_on + semi.timing.t_dead_off;
 
 % Body diode losses (use commutation current, not RMS)
-[P_body, P_body_h, P_body_l] = calculateBodyDiodeLosses( ...
-    I_sw_ss_h, I_sw_ss_l, semi.hv.Vf, semi.lv.Vf, f_sw_curr, semi.hv.timing.t_dead,semi.lv.timing.t_dead, zvs_h, zvs_l, t_req_h, t_req_l); % @saquib does commutation current == maximum ss current? Also check function calling, set dead_time consts and what is t_trans_??
-
+[P_body, P_body_h, P_body_l, info] = calculateBodyDiodeLosses( ...
+    I_comm_h, I_comm_l, V_f_h, V_f_l, f_sw, ...
+    t_dead_actual_h, t_dead_actual_l, ...
+    is_zvs_h, is_zvs_l, ...
+    t_trans_needed_h, t_trans_needed_l) % @saquib does commutation current == maximum ss current? Also check function calling, set dead_time consts and what is t_trans_??
+   % Commutation current is not the maximum steady-state current.I_comm_h and I_comm_l should be the instantaneous bridge/leg current at the exact commutation moment,
+%t_trans_needed_h and t_trans_needed_l are the commutation-transition times needed for the switch node to actually move from one rail to the other during dead time
 data_loss_body(i)   = P_body;
 data_loss_body_h(i) = P_body_h;
 data_loss_body_l(i) = P_body_l;
