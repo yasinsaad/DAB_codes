@@ -35,24 +35,29 @@ source.Vin = 800; source.Vout = 48;
 
 % --- Magnetization branch initialization (CRITICAL) ---
 trans.Lm = 1e6;        % H (constant magnetizing inductance)
-trans.Rm = 1e6;          % Ohm (dummy initial value, overwritten later) @saquib, not overwritten later. also provide source
-Tr1=0.004; % @saquib what are these? source?
-Tr2=0.003;
+trans.Rm = 1e6;          % Ohm (dummy initial value, overwritten later) @saquib, not overwritten later. also provide source-
+%very high value of rm and lm taken in simulation block as recommended by bhai, isnt a dummy as rym is not dyamic anymore
+Tr1=0.075; % @saquib what are these? source? 
+%from krismer dab model i got rac for primary and secondary, tr1 and tr2 are dc winding res for transformer simulation block , which i scaled from rac
+Tr2=6e-6;
 % --- Core parameters (you already have these) --- 
 % these may be redundant. Also source needed
 % @saquib
-trLoss.V_core = 1.2e-4;
-trLoss.A_core = 8e-4;
+%these are needed for my transformer loss calculations,source E 140/68/40 Core
+trLoss.V_core = 5.00045e-3; %in m3
+trLoss.A_core = 1.585e-3;   %in m2
 trLoss.N_pri  = 16;
 
 % --- Material point (you already have these) --- @saquib source ??!
-trLoss.Ks    = 200000;  
-trLoss.alpha = 1.6;
-trLoss.beta  = 2.2;
+%source is SIFERRIT material N97 i have calculated all these from the graphs 
+trLoss.Ks    = 1.96e4;  
+trLoss.alpha = 1.15;
+trLoss.beta  = 2.32;
 
 % --- Winding AC resistances (YOU MUST SET THESE properly) --- @saquib source ??!
-trLoss.Rac_pri = 4e-3;
-trLoss.Rac_sec = 0.3e-3;
+%source krismer page 311
+trLoss.Rac_pri =  149e-3;
+trLoss.Rac_sec = 1e-5;
 
 % --- Initialize Data Arrays ---
 results.freq = zeros(1, num_sweep);
