@@ -6,9 +6,9 @@ clear; clc; close all;
 model_name = 'DAB_freq_sweep_sim'; 
 power.target = 25000;              % 25 kW Nominal
 headroom_factor = 1.3;             % Design for 30 kW Peak
-freq_steps = (70:10:90) * 1e3;    % Frequency Sweep (10kHz to 180kHz)
+freq_steps = (10:10:120) * 1e3;    % Frequency Sweep (10kHz to 180kHz)
 num_sweep = length(freq_steps);
-sim_time = 0.16;
+sim_time = 0.3;
 max_power = headroom_factor*power.target;
 %% --- 2. PARAMETERS ---
 
@@ -42,9 +42,9 @@ trans.R2=6e-6;
 % these may be redundant. Also source needed
 % @saquib
 %these are needed for my transformer loss calculations,source E 140/68/40 Core
-trans.V_core = 5.00045e-3; %in m3
-trans.A_core = 1.585e-3;   %in m2
-trans.N_pri  = 16;
+trans.coreVolume = 5.00045e-3; %in m3
+trans.coreArea = 1.585e-3;   %in m2
+
 
 % --- Material point (you already have these) --- @saquib source ??!
 %source is SIFERRIT material N97 i have calculated all these from the graphs 
@@ -54,15 +54,15 @@ trans.beta  = 2.32;
 trans.C_wave = 1.25;
 % --- Winding AC resistances (YOU MUST SET THESE properly) --- @saquib source ??!
 %source krismer page 311
-trans.Rac_pri =  149e-3;
-trans.Rac_sec = 1e-5;
+trans.Rac1 =  149e-3;
+trans.Rac2 = 1e-5;
 
 % --- Initialize Data Arrays ---
 results.freq = zeros(1, num_sweep);
 results.eff_analytical = zeros(1, num_sweep);
 results.eff_worst_case = zeros(1, num_sweep);
 results.loss_total = zeros(1, num_sweep);
-results.breakdown = zeros(6, num_sweep);
+results.breakdown = zeros(7, num_sweep);
 
 results.coreLoss   = zeros(1, num_sweep);
 results.copperLoss  = zeros(1, num_sweep);
@@ -179,10 +179,10 @@ for i = 1:num_sweep
 
 % Body diode losses (use commutation current, not RMS)
 [P_body, P_body_h, P_body_l, info] = calculateBodyDiodeLosses( ...
-    I_comm_h, I_comm_l, V_f_h, V_f_l, f_sw, ...
-    t_dead_actual_h, t_dead_actual_l, ...
-    is_zvs_h, is_zvs_l, ...
-    t_trans_needed_h, t_trans_needed_l) % @saquib does commutation current == maximum ss current? Also check function calling, set dead_time consts and what is t_trans_??
+    I_sw_ss_h, I_sw_ss_l, semi.hv.Vf, semi.lv.Vf, f_sw_curr, ...
+    semi.hv.timing.t_dead, semi.lv.timing.t_dead, ...
+    zvs_h, zvs_l, ...
+    t_req_h, t_req_l); % @saquib does commutation current == maximum ss current? Also check function calling, set dead_time consts and what is t_trans_??
    % Commutation current is not the maximum steady-state current.I_comm_h and I_comm_l should be the instantaneous bridge/leg current at the exact commutation moment,
 %t_trans_needed_h and t_trans_needed_l are the commutation-transition times needed for the switch node to actually move from one rail to the other during dead time
 data_loss_body(i)   = P_body;
@@ -190,11 +190,11 @@ data_loss_body_h(i) = P_body_h;
 data_loss_body_l(i) = P_body_l;
 
    % --- 4.Transformer Losses ---  
-[P_core, P_cu, P_tr, B_pk, k_fe] = calculateTransformerLosses( ...
-    f_sw, Vin, Ipri_rms, Isec_rms, ...
-    V_core_fixed, A_core_fixed, N_pri, ...
-    Ks_ref, alpha, beta, ...
-    Rac_pri, Rac_sec, C_wave)
+[P_core, P_cu, P_trans, B_pk, k_fe] = calculateTransformerLosses( ...
+    f_sw_curr, source.Vin, I_rms_in, I_rms_out, ...
+    trans.coreVolume, trans.coreArea, trans.V1, ...
+    trans.Ks, trans.alpha, trans.beta, ...
+    trans.Rac1, trans.Rac2, trans.C_wave);
 %fixed calling
 
 results.coreLoss(i) = P_core;        % Core loss
@@ -206,10 +206,9 @@ results.Lk(i) = inductor.Lk;  % Store leakage inductance
     power.supplied = source.Vin*I_rms_in;
     results.freq(i) = f_sw_curr;
   results.loss_total(i) = power.loss.conduction + power.loss.cable + power.loss.gateDrive + P_sw_total + P_body + P_trans +power.loss.inductorDC;
-    results.eff_analytical(i) = 100 * power.delivered / power.supplied;
-    test = 100*(power.supplied-power.delivered)/results.loss_total(i);
-    
-    results.breakdown(:, i) = [power.loss.conduction; power.loss.cable; power.loss.gateDrive; P_sw_total; P_body; power.loss.inductorDC];
+    results.eff_analytical(i) = 100 * power.delivered / (power.delivered+results.loss_total(i));
+        
+    results.breakdown(:, i) = [power.loss.conduction; power.loss.cable; power.loss.gateDrive; P_sw_total; P_body; P_trans; power.loss.inductorDC];
     
     % Save Metrics for Plotting
     results.I_rms_h(i) = I_rms_h;
@@ -236,11 +235,14 @@ results.Lk(i) = inductor.Lk;  % Store leakage inductance
 %     results.Vol_T(i) = v_T * 1e6;     % Convert m^3 to cm^3
 %     results.Vol_Total(i) = v_tot * 1e6;
 %     
-    fprintf('%.3f| %.1f kHz | Lk:%.1fuH | I_sw: %.1fA | Eff: %.2f%% | ZVS: H:%d L:%d\n', ...
-       test, f_sw_curr/1e3, inductor.Lk/1e-6, I_sw_ss_l, results.eff_analytical(i), zvs_h, zvs_l);
+    fprintf('%.1f kHz | Lk:%.1fuH | I_sw: %.1fA | Eff: %.2f%% | ZVS: H:%d L:%d\n', ...
+       f_sw_curr/1e3, inductor.Lk/1e-6, I_sw_ss_l, results.eff_analytical(i), zvs_h, zvs_l);
     
-    plot(simOut.tout,I_raw_out);
-    title("%.2f kHz", f_sw_curr*1e-3);
+    plot(simOut.tout,I_raw_out); hold on;
+    yline(power.target/source.Vout,'--');
+    xline(simOut.tout(idx), '--');
+    hold off;
+    title(sprintf("%.2f kHz", f_sw_curr*1e-3));
     
      exportgraphics(gcf, "current_plots.pdf", ...
         'Append', true, ...
@@ -277,8 +279,8 @@ plot(freq_kHz, results.breakdown(2, :), '-x', 'LineWidth', 1.5, 'DisplayName', '
 plot(freq_kHz, results.breakdown(3, :), '-x', 'LineWidth', 1.5, 'DisplayName', 'Gate Drive Loss');
 plot(freq_kHz, results.breakdown(4, :), '-x', 'LineWidth', 1.5, 'DisplayName', 'Switching Loss');
 plot(freq_kHz, results.breakdown(5, :), '-x', 'LineWidth', 1.5, 'DisplayName', 'Body Diode Loss');
-plot(freq_kHz, results.breakdown(6, :), '-x', 'LineWidth', 1.5, 'DisplayName', 'Inductor DC Loss');
-plot(freq_kHz, results.totalTransformerLoss, '-x', 'LineWidth', 1.5, 'DisplayName', 'Transformer Loss');
+plot(freq_kHz, results.breakdown(7, :), '-x', 'LineWidth', 1.5, 'DisplayName', 'Inductor DC Loss');
+plot(freq_kHz, results.breakdown(6, :), '-x', 'LineWidth', 1.5, 'DisplayName', 'Transformer Loss');
 hold off;
 
 xlabel('Frequency (kHz)');
@@ -286,3 +288,4 @@ ylabel('Loss (W)');
 title('Individual Loss Components vs Frequency');
 legend('Location', 'best');
 grid on;
+save("SiC-Si.mat", "results", "power");
